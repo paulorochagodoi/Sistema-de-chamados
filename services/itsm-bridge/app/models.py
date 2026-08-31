@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from .glpi import TICKET_TYPE_INCIDENT
+
 # ---------------------------------------------------------------------------
 # Monitoramento proativo (RMM -> chamado)
 # ---------------------------------------------------------------------------
@@ -196,3 +198,111 @@ class SLAResponse(BaseModel):
     resolution_due_at: datetime
     business_minutes_to_response: int
     business_minutes_to_resolution: int
+
+
+# ---------------------------------------------------------------------------
+# Painel unificado (portal)
+# ---------------------------------------------------------------------------
+class PortalUser(BaseModel):
+    """Quem está operando o painel."""
+
+    id: int = 0
+    username: str
+    full_name: str = ""
+    profile: str = ""
+    # glpi = autenticado pelo formulário do painel; sso = identidade repassada
+    # por um proxy OIDC à frente do painel
+    source: Literal["glpi", "sso"] = "glpi"
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+    user: PortalUser
+
+
+class PortalService(BaseModel):
+    """Um serviço da stack, como o painel o apresenta."""
+
+    slug: str
+    name: str
+    description: str
+    category: Literal["itsm", "operacao", "plataforma"]
+    profile: str
+    url: str | None = None
+    icon: str = "box"
+    # o serviço aceita ser aberto dentro do painel (iframe) ou só em nova aba?
+    embeddable: bool = False
+
+
+class ServiceHealth(BaseModel):
+    slug: str
+    status: Literal["online", "offline", "unknown"]
+    latency_ms: int | None = None
+    detail: str = ""
+
+
+class PortalTicket(BaseModel):
+    id: int
+    title: str = ""
+    status: int = 0
+    status_label: str = ""
+    priority: int = 0
+    priority_label: str = ""
+    type: int = 0
+    type_label: str = ""
+    opened_at: str = ""
+    due_at: str = ""
+    requester: str = ""
+    technician: str = ""
+    entity: str = ""
+
+
+class TicketFollowup(BaseModel):
+    id: int
+    content: str = ""
+    created_at: str = ""
+    author: str = ""
+    is_private: bool = False
+
+
+class PortalTicketDetail(PortalTicket):
+    content: str = ""
+    followups: list[TicketFollowup] = Field(default_factory=list)
+
+
+class NewTicket(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1)
+    urgency: int = Field(default=3, ge=1, le=5)
+    type: Literal[1, 2] = TICKET_TYPE_INCIDENT
+    entity_id: int | None = None
+
+
+class NewFollowup(BaseModel):
+    content: str = Field(min_length=1)
+    is_private: bool = False
+
+
+class TicketSolution(BaseModel):
+    content: str = Field(min_length=1)
+
+
+class PortalSummary(BaseModel):
+    """Números do painel inicial, agregados a partir dos chamados abertos."""
+
+    total: int = 0
+    open: int = 0
+    unassigned: int = 0
+    overdue: int = 0
+    at_risk: int = 0
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_priority: dict[str, int] = Field(default_factory=dict)
+    by_technician: dict[str, int] = Field(default_factory=dict)
+    recent: list[PortalTicket] = Field(default_factory=list)

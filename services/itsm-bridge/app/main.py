@@ -6,6 +6,7 @@ Responsabilidades:
 * espelhar conversas do Chatwoot como chamados (omnichannel);
 * calcular prazos de SLA respeitando a janela de atendimento do contrato;
 * calcular faturas a partir dos apontamentos de horas;
+* servir a API do painel unificado (catálogo de serviços, status e chamados);
 * publicar métricas de negócio para o Prometheus.
 """
 
@@ -27,7 +28,8 @@ from . import metrics
 from .config import get_settings
 from .glpi import SEARCH_OPTION_TICKET_TIME_TO_RESOLVE, GLPIClient
 from .models import BusinessHours
-from .routers import billing, health, sla, webhooks
+from .portal import StatusCache
+from .routers import billing, health, portal, sla, webhooks
 from .sla import is_at_risk
 from .store import build_store
 
@@ -84,6 +86,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     app.state.http_client = httpx.AsyncClient(timeout=settings.glpi_timeout_seconds)
+    # Sondas do painel: os serviços internos falam HTTP puro ou TLS
+    # auto-assinado (MeshCentral), então a verificação de certificado só
+    # produziria falso negativo aqui.
+    app.state.probe_client = httpx.AsyncClient(
+        timeout=settings.portal_probe_timeout_seconds, verify=False
+    )
+    app.state.status_cache = StatusCache(settings.portal_status_ttl_seconds)
     app.state.store = build_store(settings.redis_url)
 
     poller: asyncio.Task | None = None
@@ -100,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             with contextlib.suppress(asyncio.CancelledError):
                 await poller
         await app.state.store.close()
+        await app.state.probe_client.aclose()
         await app.state.http_client.aclose()
 
 
@@ -114,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks.router)
     app.include_router(billing.router)
     app.include_router(sla.router)
+    app.include_router(portal.router)
 
     @app.get("/metrics", include_in_schema=False)
     def prometheus_metrics() -> PlainTextResponse:

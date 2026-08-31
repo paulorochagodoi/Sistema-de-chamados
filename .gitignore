@@ -15,6 +15,10 @@ venv/
 .ruff_cache/
 *.egg-info/
 
+# front-end do portal
+node_modules/
+dist/
+
 # editores e SO
 .vscode/
 .idea/

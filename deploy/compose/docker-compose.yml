@@ -3,8 +3,8 @@
 # -----------------------------------------------------------------------------
 # Os serviços são divididos em profiles, alinhados às fases do roadmap:
 #
-#   core          Fase 1 — GLPI, MariaDB, PostgreSQL, Redis, MinIO, Keycloak,
-#                 Traefik e o itsm-bridge (integrações próprias)
+#   core          Fase 1 — portal (painel unificado), GLPI, MariaDB, PostgreSQL,
+#                 Redis, MinIO, Keycloak, Traefik e o itsm-bridge
 #   rmm           Fase 2 — MeshCentral (RMM + acesso não supervisionado) e
 #                 RustDesk (acesso sob demanda)
 #   omnichannel   Fase 3 — Chatwoot (chat, WhatsApp, e-mail unificados)
@@ -283,7 +283,7 @@ services:
       traefik.http.routers.glpi.rule: Host(`glpi.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.glpi.entrypoints: websecure
       traefik.http.routers.glpi.tls: "true"
-      traefik.http.routers.glpi.middlewares: security-headers@file
+      traefik.http.routers.glpi.middlewares: security-headers@file,portal-embed@docker
       traefik.http.services.glpi.loadbalancer.server.port: "80"
 
   glpi-cron:
@@ -327,6 +327,12 @@ services:
       BRIDGE_DEDUPE_TTL_SECONDS: ${BRIDGE_DEDUPE_TTL_SECONDS:-900}
       BRIDGE_CONVERSATION_TTL_SECONDS: ${BRIDGE_CONVERSATION_TTL_SECONDS:-604800}
       BRIDGE_REDIS_URL: redis://:${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}@redis:6379/1
+      # --- painel unificado ---
+      BRIDGE_PORTAL_DOMAIN: ${DOMAIN:-itsm.localhost}
+      BRIDGE_PORTAL_PROFILES: ${PORTAL_PROFILES:-core,rmm,omnichannel,automation,bi,observability}
+      BRIDGE_PORTAL_SECRET: ${PORTAL_SECRET:-}
+      BRIDGE_PORTAL_SESSION_MINUTES: ${PORTAL_SESSION_MINUTES:-480}
+      BRIDGE_PORTAL_TRUST_FORWARDED_AUTH: ${PORTAL_TRUST_FORWARDED_AUTH:-false}
     networks: [edge, data]
     depends_on:
       redis:
@@ -345,6 +351,37 @@ services:
       traefik.http.routers.bridge.tls: "true"
       traefik.http.routers.bridge.middlewares: security-headers@file
       traefik.http.services.bridge.loadbalancer.server.port: "8000"
+
+  # ---------------------------------------------------------------------------
+  # portal — painel unificado: uma interface para todos os serviços da stack
+  # ---------------------------------------------------------------------------
+  # Serve o SPA e faz proxy de /api para o itsm-bridge (mesma origem, sem CORS).
+  # Responde no domínio raiz e em portal.<domínio>: é a porta de entrada.
+  portal:
+    build:
+      context: ../../services/portal
+    image: itsm-portal:local
+    profiles: [core]
+    <<: [*restart, *logging]
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+    networks: [edge]
+    depends_on:
+      - itsm-bridge
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.portal.rule: Host(`portal.${DOMAIN:-itsm.localhost}`) || Host(`${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.portal.entrypoints: websecure
+      traefik.http.routers.portal.tls: "true"
+      traefik.http.routers.portal.middlewares: security-headers@file,rate-limit@file
+      traefik.http.services.portal.loadbalancer.server.port: "80"
+      # Middleware compartilhado, usado pelos serviços que o painel embute em
+      # iframe. Substituir o CSP do backend é aceitável aqui porque o valor
+      # abaixo é mais restritivo que o padrão (só o portal pode enquadrar) — e
+      # sem ele o X-Frame-Options de cada app deixaria o quadro em branco.
+      traefik.http.middlewares.portal-embed.headers.customresponseheaders.X-Frame-Options: ""
+      traefik.http.middlewares.portal-embed.headers.customresponseheaders.Content-Security-Policy: "frame-ancestors 'self' https://portal.${DOMAIN:-itsm.localhost} https://${DOMAIN:-itsm.localhost}"
 
   # ---------------------------------------------------------------------------
   # Fase 2 — RMM e acesso remoto
@@ -374,6 +411,7 @@ services:
       traefik.http.routers.meshcentral.rule: Host(`rmm.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.meshcentral.entrypoints: websecure
       traefik.http.routers.meshcentral.tls: "true"
+      traefik.http.routers.meshcentral.middlewares: portal-embed@docker
       traefik.http.services.meshcentral.loadbalancer.server.port: "443"
       traefik.http.services.meshcentral.loadbalancer.server.scheme: https
 
@@ -454,7 +492,7 @@ services:
       traefik.http.routers.chatwoot.rule: Host(`chat.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.chatwoot.entrypoints: websecure
       traefik.http.routers.chatwoot.tls: "true"
-      traefik.http.routers.chatwoot.middlewares: security-headers@file
+      traefik.http.routers.chatwoot.middlewares: security-headers@file,portal-embed@docker
       traefik.http.services.chatwoot.loadbalancer.server.port: "3000"
 
   chatwoot-worker:
@@ -516,7 +554,7 @@ services:
       traefik.http.routers.n8n.rule: Host(`n8n.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.n8n.entrypoints: websecure
       traefik.http.routers.n8n.tls: "true"
-      traefik.http.routers.n8n.middlewares: security-headers@file
+      traefik.http.routers.n8n.middlewares: security-headers@file,portal-embed@docker
       traefik.http.services.n8n.loadbalancer.server.port: "5678"
 
   n8n-worker:
@@ -600,6 +638,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
       GF_SERVER_ROOT_URL: https://grafana.${DOMAIN:-itsm.localhost}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # painéis abertos dentro do portal (mesmo site, subdomínio diferente)
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -611,7 +651,7 @@ services:
       traefik.http.routers.grafana.rule: Host(`grafana.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.grafana.entrypoints: websecure
       traefik.http.routers.grafana.tls: "true"
-      traefik.http.routers.grafana.middlewares: security-headers@file
+      traefik.http.routers.grafana.middlewares: security-headers@file,portal-embed@docker
       traefik.http.services.grafana.loadbalancer.server.port: "3000"
 
   loki:

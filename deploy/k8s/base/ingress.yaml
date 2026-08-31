@@ -1,4 +1,5 @@
 # Roteamento externo. Ajuste o host para o seu domínio e o issuer do cert-manager.
+# O portal é a porta de entrada: publique-o no domínio raiz e/ou em portal.<domínio>.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -11,10 +12,21 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
+        - portal.example.com
         - glpi.example.com
         - bridge.example.com
       secretName: itsm-tls
   rules:
+    - host: portal.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: portal
+                port:
+                  name: http
     - host: glpi.example.com
       http:
         paths:

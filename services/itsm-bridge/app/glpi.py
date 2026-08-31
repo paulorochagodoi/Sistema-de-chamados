@@ -20,11 +20,36 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# searchoptions do GLPI usadas nas buscas (ver Configurar > pesquisa)
+# searchoptions do GLPI usadas nas buscas. Os números saem de
+# `GET /apirest.php/listSearchOptions/Ticket` (ou Configurar > pesquisa na UI)
+# e são estáveis entre instalações do GLPI 10.
 SEARCH_OPTION_NAME = 1
 SEARCH_OPTION_COMPUTER_SERIAL = 5
 SEARCH_OPTION_ENTITY_COMPLETENAME = 1
 SEARCH_OPTION_TICKET_TIME_TO_RESOLVE = 18
+
+SEARCH_OPTION_TICKET_ID = 2
+SEARCH_OPTION_TICKET_PRIORITY = 3
+SEARCH_OPTION_TICKET_REQUESTER = 4
+SEARCH_OPTION_TICKET_TECHNICIAN = 5
+SEARCH_OPTION_TICKET_STATUS = 12
+SEARCH_OPTION_TICKET_TYPE = 14
+SEARCH_OPTION_TICKET_OPENING_DATE = 15
+SEARCH_OPTION_TICKET_ENTITY = 80
+
+# Campos que o painel pede em toda listagem de chamados
+TICKET_LIST_FIELDS = [
+    SEARCH_OPTION_TICKET_ID,
+    SEARCH_OPTION_NAME,
+    SEARCH_OPTION_TICKET_PRIORITY,
+    SEARCH_OPTION_TICKET_REQUESTER,
+    SEARCH_OPTION_TICKET_TECHNICIAN,
+    SEARCH_OPTION_TICKET_STATUS,
+    SEARCH_OPTION_TICKET_TYPE,
+    SEARCH_OPTION_TICKET_OPENING_DATE,
+    SEARCH_OPTION_TICKET_TIME_TO_RESOLVE,
+    SEARCH_OPTION_TICKET_ENTITY,
+]
 
 # Mapa severidade do alerta -> urgência do GLPI (1 = muito baixa ... 5 = muito alta)
 SEVERITY_TO_URGENCY = {
@@ -152,14 +177,61 @@ class GLPIClient:
                 f"({response.status_code}): {response.text[:300]}"
             )
 
+    async def get_item(
+        self, itemtype: str, item_id: int, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        client = await self._http()
+        response = await client.get(
+            f"{self.base_url}/{itemtype}/{item_id}",
+            headers=self._headers(),
+            params=params or {},
+        )
+        if response.status_code == 404:
+            raise GLPIError(f"{itemtype}/{item_id} não encontrado")
+        if response.status_code != 200:
+            raise GLPIError(
+                f"leitura de {itemtype}/{item_id} falhou "
+                f"({response.status_code}): {response.text[:300]}"
+            )
+        return response.json()
+
+    async def get_sub_items(
+        self,
+        itemtype: str,
+        item_id: int,
+        sub_itemtype: str,
+        params: dict[str, Any] | None = None,
+    ) -> list[dict]:
+        """Itens filhos de um item (ex.: acompanhamentos de um chamado)."""
+        client = await self._http()
+        response = await client.get(
+            f"{self.base_url}/{itemtype}/{item_id}/{sub_itemtype}",
+            headers=self._headers(),
+            params=params or {},
+        )
+        if response.status_code not in (200, 206):
+            raise GLPIError(
+                f"leitura de {itemtype}/{item_id}/{sub_itemtype} falhou "
+                f"({response.status_code}): {response.text[:300]}"
+            )
+        if not response.content:
+            return []
+        body = response.json()
+        return body if isinstance(body, list) else []
+
     async def search(
         self,
         itemtype: str,
         criteria: list[dict[str, Any]],
         forcedisplay: list[int] | None = None,
         range_: str = "0-49",
+        sort: int | None = None,
+        order: str = "DESC",
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"range": range_}
+        if sort is not None:
+            params["sort"] = sort
+            params["order"] = order
         for index, criterion in enumerate(criteria):
             for key, value in criterion.items():
                 params[f"criteria[{index}][{key}]"] = value
@@ -225,19 +297,21 @@ class GLPIClient:
         entity_id: int,
         urgency: int = 3,
         ticket_type: int = TICKET_TYPE_INCIDENT,
+        requester_id: int | None = None,
     ) -> int:
-        return await self.create_item(
-            "Ticket",
-            {
-                "name": name[:255],
-                "content": content,
-                "entities_id": entity_id,
-                "urgency": urgency,
-                "impact": urgency,
-                "priority": urgency,
-                "type": ticket_type,
-            },
-        )
+        payload: dict[str, Any] = {
+            "name": name[:255],
+            "content": content,
+            "entities_id": entity_id,
+            "urgency": urgency,
+            "impact": urgency,
+            "priority": urgency,
+            "type": ticket_type,
+        }
+        if requester_id:
+            # atribui o chamado a quem abriu pelo painel, em vez do usuário da API
+            payload["_users_id_requester"] = requester_id
+        return await self.create_item("Ticket", payload)
 
     async def add_followup(self, ticket_id: int, content: str, is_private: bool = False) -> int:
         return await self.create_item(
@@ -263,6 +337,69 @@ class GLPIClient:
             {"itemtype": "Ticket", "items_id": ticket_id, "content": solution},
         )
         await self.update_item("Ticket", ticket_id, {"status": TICKET_STATUS_SOLVED})
+
+    async def list_tickets(
+        self,
+        status: str | int = "notold",
+        search: str = "",
+        entity_id: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Chamados para a listagem do painel, do mais recente para o mais antigo.
+
+        ``status`` aceita um id do GLPI (1..6), ``notold`` (não encerrados),
+        ``old`` (encerrados) ou ``all``.
+        """
+        criteria: list[dict[str, Any]] = []
+        if status != "all":
+            criteria.append(
+                {
+                    "field": SEARCH_OPTION_TICKET_STATUS,
+                    "searchtype": "equals",
+                    "value": status,
+                }
+            )
+        if search:
+            criteria.append(
+                {
+                    "link": "AND",
+                    "field": SEARCH_OPTION_NAME,
+                    "searchtype": "contains",
+                    "value": search,
+                }
+            )
+        if entity_id is not None:
+            criteria.append(
+                {
+                    "link": "AND",
+                    "field": SEARCH_OPTION_TICKET_ENTITY,
+                    "searchtype": "equals",
+                    "value": entity_id,
+                }
+            )
+        if not criteria:  # o GLPI exige ao menos um critério
+            criteria.append(
+                {"field": SEARCH_OPTION_TICKET_ID, "searchtype": "greaterthan", "value": 0}
+            )
+
+        last = offset + max(limit, 1) - 1
+        return await self.search(
+            "Ticket",
+            criteria,
+            forcedisplay=TICKET_LIST_FIELDS,
+            range_=f"{offset}-{last}",
+            sort=SEARCH_OPTION_TICKET_OPENING_DATE,
+            order="DESC",
+        )
+
+    async def get_ticket(self, ticket_id: int) -> dict[str, Any]:
+        return await self.get_item("Ticket", ticket_id, {"expand_dropdowns": "true"})
+
+    async def ticket_followups(self, ticket_id: int) -> list[dict[str, Any]]:
+        return await self.get_sub_items(
+            "Ticket", ticket_id, "ITILFollowup", {"expand_dropdowns": "true"}
+        )
 
     async def open_tickets_with_deadline(self, limit: int = 200) -> list[dict[str, Any]]:
         """Chamados não encerrados com prazo de resolução definido."""

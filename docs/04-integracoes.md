@@ -25,7 +25,8 @@ Em produção, defina `BRIDGE_RMM_WEBHOOK_SECRET` e
 ### 2.1 Habilitar a API
 
 1. **Configurar → Geral → API**: ative "Habilitar API REST" e "Habilitar login
-   com credenciais externas".
+   com credenciais externas" — a segunda opção é o que permite ao painel
+   autenticar as pessoas com o usuário e a senha do próprio GLPI.
 2. Crie um **App-Token** (cliente de API) com a faixa de IP do bridge.
 3. No usuário de serviço (perfil com permissão de criar chamados em todas as
    entidades), gere o **user_token** em *Preferências → API*.
@@ -231,3 +232,84 @@ Os workflows usam as variáveis `GLPI_API_URL`, `GLPI_APP_TOKEN`,
 `GLPI_USER_TOKEN` e `BRIDGE_URL`, já injetadas no container do n8n. Os nós
 `noOp` marcados como "notifica"/"revisão" são pontos de plugue: troque por
 Slack, Teams, e-mail ou WhatsApp conforme o canal da equipe.
+
+## 10. Painel unificado (portal)
+
+A API do painel vive no `itsm-bridge`, sob `/api/portal`, e o navegador a
+alcança pela mesma origem do portal (`https://<DOMAIN>/api/portal/...`), via
+proxy do nginx. Fora `/auth/login`, todo endpoint exige um usuário autenticado.
+
+### 10.1 Sessão
+
+```http
+POST /api/portal/auth/login
+Content-Type: application/json
+
+{"username": "ana", "password": "..."}
+```
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer",
+  "expires_in": 28800,
+  "user": {"id": 7, "username": "ana", "full_name": "Ana Técnica",
+           "profile": "Técnico", "source": "glpi"}
+}
+```
+
+As credenciais são validadas no GLPI (`initSession` com `Authorization: Basic`)
+e a sessão do GLPI é encerrada em seguida: o painel guarda apenas a identidade.
+O token é um JWT HS256 assinado com `BRIDGE_PORTAL_SECRET` e vale
+`BRIDGE_PORTAL_SESSION_MINUTES` minutos. Nas demais chamadas, envie
+`Authorization: Bearer <token>`.
+
+`GET /api/portal/auth/me` devolve o usuário da sessão — é o que o SPA usa para
+decidir entre mostrar o painel ou o formulário de login.
+
+**SSO.** Com um proxy OIDC na frente do portal (oauth2-proxy, Authelia), ligue
+`BRIDGE_PORTAL_TRUST_FORWARDED_AUTH=true`: o bridge passa a aceitar a identidade
+do cabeçalho `X-Auth-Request-User` e o formulário some. Só ligue se ninguém além
+do proxy alcançar o portal — um cabeçalho não é prova de nada por si só.
+
+### 10.2 Catálogo e status
+
+| Endpoint | Devolve |
+|---|---|
+| `GET /api/portal/services` | catálogo: slug, nome, categoria, perfil, URL pública, se pode ser embutido |
+| `GET /api/portal/services/status` | `online`/`offline`/`unknown` e latência de cada serviço |
+
+O status é sondado por dentro da rede do Compose (`http://glpi/`,
+`http://keycloak:9000/health/ready`, TCP em `rustdesk-hbbs:21116`, …), com cache
+de `BRIDGE_PORTAL_STATUS_TTL_SECONDS` segundos. Não depende de DNS externo nem
+do certificado — um serviço pode estar de pé e o DNS errado, e a página mostra
+exatamente isso.
+
+### 10.3 Chamados
+
+| Endpoint | O que faz |
+|---|---|
+| `GET /api/portal/tickets?status=notold&search=&limit=50&offset=0` | fila (status: id 1..6, `notold`, `old`, `all`) |
+| `GET /api/portal/summary` | agregados do painel: por status, prioridade e técnico, mais vencidos e sem atribuição |
+| `POST /api/portal/tickets` | abre chamado com quem está logado como solicitante |
+| `GET /api/portal/tickets/{id}` | detalhe com acompanhamentos |
+| `POST /api/portal/tickets/{id}/followups` | registra acompanhamento (assinado com o nome de quem escreveu) |
+| `POST /api/portal/tickets/{id}/solution` | registra a solução e move para *solucionado* |
+
+As leituras traduzem as *searchoptions* do GLPI (`{"1": "título", "12": 2, …}`)
+para campos nomeados, e o conteúdo HTML dos chamados vira texto puro no bridge —
+o painel nunca injeta HTML de terceiros na página.
+
+O bridge fala com o GLPI pela conta de serviço (`GLPI_APP_TOKEN` /
+`GLPI_USER_TOKEN`): o usuário autenticado define *quem pediu*, não com quais
+permissões a operação corre. Se o seu caso exige permissão por usuário, coloque
+o portal atrás do SSO e restrinja o perfil da conta de serviço.
+
+### 10.4 Variáveis
+
+| Variável (`.env`) | Efeito |
+|---|---|
+| `PORTAL_SECRET` | chave de assinatura das sessões (vazia = chave efêmera por processo) |
+| `PORTAL_SESSION_MINUTES` | validade do token (padrão 480) |
+| `PORTAL_PROFILES` | perfis do Compose que o menu deve listar |
+| `PORTAL_TRUST_FORWARDED_AUTH` | aceita identidade repassada por proxy de SSO |

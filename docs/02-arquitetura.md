@@ -13,6 +13,11 @@ as escolhas que divergem dela estão justificadas em
                  ┌────────▼─────────┐
                  │  Traefik (edge)  │  TLS, redirect 80→443, headers, rate limit
                  └────────┬─────────┘
+                          │
+              ┌───────────▼────────────┐
+              │  portal (painel único) │  <DOMAIN> e portal.<DOMAIN>
+              │  SPA + proxy /api      │  menu, chamados, status, iframes
+              └───────────┬────────────┘
         ┌─────────┬───────┼─────────┬──────────┬──────────┐
    ┌────▼───┐ ┌───▼────┐ ┌▼───────┐ ┌▼────────┐ ┌▼───────┐ ┌▼────────┐
    │  GLPI  │ │Keycloak│ │Chatwoot│ │MeshCentr│ │  n8n   │ │Metabase │
@@ -27,6 +32,12 @@ as escolhas que divergem dela estão justificadas em
    glpi-cron (worker único)                    chatwoot-worker, n8n-worker
 ```
 
+O portal não substitui os serviços: cada um continua no seu subdomínio, com sua
+própria sessão. O que o painel faz é reunir todos em um menu, mostrar a saúde de
+cada um e resolver no próprio painel o que é operação do dia a dia (fila de
+chamados, prazos de SLA, prévia de fatura), abrindo os demais dentro do mesmo
+enquadramento — ver [§8](#8-o-painel-unificado-portal).
+
 Duas redes:
 
 * **`itsm_edge`** — onde o Traefik publica e por onde os serviços falam com a
@@ -39,6 +50,7 @@ Duas redes:
 | Serviço | Papel | Profile |
 |---|---|---|
 | `traefik` | Ingress, TLS, headers de segurança, métricas | core |
+| `portal` | Painel unificado: menu único, chamados, status e acesso a todos os serviços | core |
 | `glpi` | Núcleo ITSM: chamados, CMDB, contratos, KB, catálogo | core |
 | `glpi-cron` | Worker de tarefas agendadas do GLPI (réplica única) | core |
 | `mariadb` | Banco do GLPI | core |
@@ -166,3 +178,52 @@ uma): relatório pesado não pode competir com abertura de chamado.
 | MFA e TLS 1.2+ | Keycloak com `CONFIGURE_TOTP` obrigatório; `tls.options.default.minVersion: VersionTLS12` |
 | Auditoria | eventos de admin no Keycloak, gravação de sessão no MinIO com retenção de 365 dias, logs no Loki |
 | Portabilidade | tudo em container, sem serviço gerenciado de nuvem; Compose e Kubernetes a partir das mesmas imagens |
+
+## 8. O painel unificado (portal)
+
+Antes, cada serviço tinha a sua URL e o técnico decorava seis endereços. O
+`portal` é a porta única: responde no domínio raiz (e em `portal.<DOMAIN>`),
+serve um SPA React e faz proxy de `/api` para o `itsm-bridge`.
+
+```
+navegador ──► portal (nginx)  ──► /            SPA (React)
+                              └─► /api/portal  itsm-bridge (mesma origem)
+                    │
+                    └─ iframe ──► glpi. / rmm. / chat. / n8n. / grafana.
+```
+
+**Por que proxy e não chamada direta ao `bridge.<DOMAIN>`**: mantendo tudo na
+mesma origem não há CORS, o token não circula entre domínios e a API do painel
+herda o controle de acesso do portal.
+
+**O que é nativo e o que é embutido.** É nativo o que se ganha em consolidar —
+o resumo de chamados (que atravessa status, prazo e técnico), a fila com filtro
+e abertura, o detalhe com acompanhamento e solução, o cálculo de SLA, a prévia
+de fatura e o status de toda a stack. O resto é a interface do próprio serviço,
+aberta dentro do painel via iframe (GLPI, MeshCentral, Chatwoot, n8n, Grafana)
+ou em nova aba quando o serviço não aceita ser enquadrado (Keycloak, MinIO,
+Metabase). Reimplementar a UI do GLPI ou do Grafana seria manter um clone
+desatualizado de cada um.
+
+**Como o enquadramento é liberado.** O middleware `portal-embed@docker`
+(definido nos labels do serviço `portal`) remove o `X-Frame-Options` das
+respostas desses serviços e coloca no lugar
+`Content-Security-Policy: frame-ancestors 'self' https://portal.<DOMAIN>
+https://<DOMAIN>` — mais restritivo que o padrão, porque só o painel pode
+enquadrar. Os cookies continuam funcionando porque portal e serviços são
+subdomínios do mesmo site (`SameSite=Lax` não bloqueia same-site).
+
+**Catálogo e status.** O `itsm-bridge` conhece o catálogo
+(`app/portal.py`): slug, categoria, perfil do Compose, URL pública derivada de
+`BRIDGE_PORTAL_DOMAIN` e como sondar o serviço por dentro da rede — HTTP para os
+serviços web, TCP para o relay do RustDesk. As sondas rodam em paralelo, com
+cache curto, e alimentam tanto a página de status quanto o alerta vermelho no
+menu. `BRIDGE_PORTAL_PROFILES` filtra o catálogo para os perfis que o operador
+realmente subiu.
+
+**Sessão.** O login do painel valida usuário e senha no próprio GLPI
+(`initSession` com Basic auth) e devolve um JWT HS256 assinado com
+`BRIDGE_PORTAL_SECRET` — não há base de usuários paralela. Quando o portal está
+atrás de um proxy OIDC (oauth2-proxy, Authelia), o bridge aceita a identidade
+repassada no cabeçalho, desde que `BRIDGE_PORTAL_TRUST_FORWARDED_AUTH=true`.
+Detalhes em [04-integracoes.md](04-integracoes.md#10-painel-unificado-portal).

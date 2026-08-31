@@ -28,10 +28,20 @@ class FakeGLPI:
         self.followups: list[tuple[int, str]] = []
         self.links: list[tuple[int, int]] = []
         self.solutions: list[tuple[int, str]] = []
+        # linhas cruas de /search/Ticket devolvidas por list_tickets
+        self.rows: list[dict[str, Any]] = []
+        self.queries: list[dict[str, Any]] = []
+        self.followups_added: list[dict[str, Any]] = []
         self._next_id = 1000
 
     async def create_ticket(
-        self, name: str, content: str, entity_id: int, urgency: int = 3, ticket_type: int = 1
+        self,
+        name: str,
+        content: str,
+        entity_id: int,
+        urgency: int = 3,
+        ticket_type: int = 1,
+        requester_id: int | None = None,
     ) -> int:
         if "create_ticket" in self.fail_on:
             from app.glpi import GLPIError
@@ -46,12 +56,22 @@ class FakeGLPI:
                 "entities_id": entity_id,
                 "urgency": urgency,
                 "type": ticket_type,
+                "requester_id": requester_id,
             }
         )
         return self._next_id
 
     async def add_followup(self, ticket_id: int, content: str, is_private: bool = False) -> int:
         self.followups.append((ticket_id, content))
+        self.followups_added.append(
+            {
+                "id": 100 + len(self.followups),
+                "content": content,
+                "date_creation": "2026-08-31 10:00:00",
+                "users_id": "API",
+                "is_private": int(is_private),
+            }
+        )
         return len(self.followups)
 
     async def find_computer_id(self, hostname: str, serial: str | None = None) -> int | None:
@@ -71,6 +91,55 @@ class FakeGLPI:
 
     async def solve_ticket(self, ticket_id: int, solution: str) -> None:
         self.solutions.append((ticket_id, solution))
+
+    # -- leituras usadas pelo painel ---------------------------------------
+    async def list_tickets(
+        self,
+        status: str | int = "notold",
+        search: str = "",
+        entity_id: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if "list_tickets" in self.fail_on:
+            from app.glpi import GLPIError
+
+            raise GLPIError("busca indisponível")
+        self.queries.append(
+            {
+                "status": status,
+                "search": search,
+                "entity_id": entity_id,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+        return self.rows[offset : offset + limit]
+
+    async def get_ticket(self, ticket_id: int) -> dict[str, Any]:
+        return {
+            "id": ticket_id,
+            "name": "Impressora sem tinta",
+            "content": "<p>Trocar o <b>toner</b></p>",
+            "status": 2,
+            "priority": 4,
+            "type": 1,
+            "date_creation": "2026-08-31 09:00:00",
+            "time_to_resolve": "2026-08-31 17:00:00",
+            "entities_id": "Cliente A",
+        }
+
+    async def ticket_followups(self, ticket_id: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": 1,
+                "content": "<p>Chamado recebido</p>",
+                "date_creation": "2026-08-31 09:05:00",
+                "users_id": "Ana",
+                "is_private": 0,
+            },
+            *self.followups_added,
+        ]
 
 
 @pytest.fixture

@@ -4,9 +4,14 @@
 #     --profile core up -d
 #
 # Requisitos: DOMAIN público, portas 80/443 acessíveis pela internet e
-# registros DNS apontando para este host (glpi., sso., chat., rmm., n8n.,
-# bi., s3., minio., bridge., grafana.).
+# registros DNS apontando para este host — o domínio raiz (portal) e os
+# subdomínios portal., glpi., sso., chat., rmm., n8n., bi., s3., minio.,
+# bridge., grafana.
 services:
+  portal:
+    labels:
+      traefik.http.routers.portal.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
   glpi:
     labels:
       traefik.http.routers.glpi.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import secrets
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Usada quando BRIDGE_PORTAL_SECRET não é definida (ver portal_signing_key).
+_EPHEMERAL_PORTAL_SECRET = secrets.token_urlsafe(48)
 
 
 class Settings(BaseSettings):
@@ -36,6 +40,28 @@ class Settings(BaseSettings):
     conversation_ttl_seconds: int = 604_800  # 7 dias
     redis_url: str = ""
 
+    # --- Painel unificado (portal) ---------------------------------------
+    # Domínio raiz da stack; as URLs públicas dos serviços derivam dele
+    # (glpi.<domínio>, sso.<domínio>, ...).
+    portal_domain: str = "itsm.localhost"
+    # Perfis do Compose que o operador subiu — filtra o catálogo do painel.
+    portal_profiles: str = "core,rmm,omnichannel,automation,bi,observability"
+    # Chave de assinatura dos tokens de sessão do painel. Vazia gera uma chave
+    # efêmera no processo: funciona em dev, mas invalida sessões a cada restart
+    # e não serve com mais de uma réplica.
+    portal_secret: str = ""
+    portal_session_minutes: int = 480
+    # Aceitar identidade repassada por um proxy de SSO (oauth2-proxy, Authelia).
+    # Só ligue quando o painel estiver atrás desse proxy: o cabeçalho é
+    # confiável apenas se ninguém além do proxy alcançar o bridge.
+    portal_trust_forwarded_auth: bool = False
+    portal_forwarded_user_header: str = "X-Auth-Request-User"
+    portal_forwarded_name_header: str = "X-Auth-Request-Preferred-Username"
+    # Sondagem de disponibilidade dos serviços mostrada no painel
+    portal_status_ttl_seconds: int = 15
+    portal_probe_timeout_seconds: float = 3.0
+    portal_page_size: int = 50
+
     # Coletor que alimenta a métrica itsm_tickets_sla_at_risk
     sla_poll_interval_seconds: int = 300
     sla_at_risk_threshold_minutes: int = 60
@@ -65,6 +91,15 @@ class Settings(BaseSettings):
     @property
     def glpi_configured(self) -> bool:
         return bool(self.glpi_app_token and self.glpi_user_token)
+
+    @property
+    def portal_enabled_profiles(self) -> set[str]:
+        return {item.strip() for item in self.portal_profiles.split(",") if item.strip()}
+
+    @property
+    def portal_signing_key(self) -> str:
+        """Chave HMAC dos tokens do painel, com fallback efêmero em dev."""
+        return self.portal_secret or _EPHEMERAL_PORTAL_SECRET
 
 
 @lru_cache

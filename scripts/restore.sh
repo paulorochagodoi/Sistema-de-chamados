@@ -17,8 +17,10 @@ fi
 
 COMPOSE="docker compose --env-file .env -f deploy/compose/docker-compose.yml"
 
-# shellcheck disable=SC1091
-set -a; source .env; set +a
+set -a
+# shellcheck disable=SC1091  # o .env não existe no lint, só em execução
+source .env
+set +a
 
 echo "ATENÇÃO: isto sobrescreve os dados atuais do stack."
 read -r -p "Digite 'restaurar' para confirmar: " confirm

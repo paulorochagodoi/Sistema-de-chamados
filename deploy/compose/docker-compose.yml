@@ -34,6 +34,13 @@ x-logging: &logging
       max-size: "10m"
       max-file: "3"
 
+# Cabeçalho que autoriza o painel a exibir o serviço em iframe. Cada serviço
+# define o *seu* middleware com este valor, nos próprios labels: um roteador que
+# aponta para middleware inexistente é desabilitado pelo Traefik (vira 404), e
+# definição e roteador no mesmo container nunca ficam órfãos um do outro.
+# O valor é mais restritivo que o padrão dos apps — só o painel pode enquadrar.
+x-embed-csp: &embed-csp "frame-ancestors 'self' https://portal.${DOMAIN:-itsm.localhost} https://${DOMAIN:-itsm.localhost}"
+
 x-glpi-env: &glpi-env
   TZ: ${TZ:-America/Sao_Paulo}
   GLPI_DB_HOST: ${GLPI_DB_HOST:-mariadb}
@@ -283,7 +290,9 @@ services:
       traefik.http.routers.glpi.rule: Host(`glpi.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.glpi.entrypoints: websecure
       traefik.http.routers.glpi.tls: "true"
-      traefik.http.routers.glpi.middlewares: security-headers@file,portal-embed@docker
+      traefik.http.routers.glpi.middlewares: security-headers@file,glpi-embed@docker
+      traefik.http.middlewares.glpi-embed.headers.customresponseheaders.X-Frame-Options: ""
+      traefik.http.middlewares.glpi-embed.headers.customresponseheaders.Content-Security-Policy: *embed-csp
       traefik.http.services.glpi.loadbalancer.server.port: "80"
 
   glpi-cron:
@@ -376,12 +385,6 @@ services:
       traefik.http.routers.portal.tls: "true"
       traefik.http.routers.portal.middlewares: security-headers@file,rate-limit@file
       traefik.http.services.portal.loadbalancer.server.port: "80"
-      # Middleware compartilhado, usado pelos serviços que o painel embute em
-      # iframe. Substituir o CSP do backend é aceitável aqui porque o valor
-      # abaixo é mais restritivo que o padrão (só o portal pode enquadrar) — e
-      # sem ele o X-Frame-Options de cada app deixaria o quadro em branco.
-      traefik.http.middlewares.portal-embed.headers.customresponseheaders.X-Frame-Options: ""
-      traefik.http.middlewares.portal-embed.headers.customresponseheaders.Content-Security-Policy: "frame-ancestors 'self' https://portal.${DOMAIN:-itsm.localhost} https://${DOMAIN:-itsm.localhost}"
 
   # ---------------------------------------------------------------------------
   # Fase 2 — RMM e acesso remoto
@@ -411,7 +414,9 @@ services:
       traefik.http.routers.meshcentral.rule: Host(`rmm.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.meshcentral.entrypoints: websecure
       traefik.http.routers.meshcentral.tls: "true"
-      traefik.http.routers.meshcentral.middlewares: portal-embed@docker
+      traefik.http.routers.meshcentral.middlewares: meshcentral-embed@docker
+      traefik.http.middlewares.meshcentral-embed.headers.customresponseheaders.X-Frame-Options: ""
+      traefik.http.middlewares.meshcentral-embed.headers.customresponseheaders.Content-Security-Policy: *embed-csp
       traefik.http.services.meshcentral.loadbalancer.server.port: "443"
       traefik.http.services.meshcentral.loadbalancer.server.scheme: https
 
@@ -492,7 +497,9 @@ services:
       traefik.http.routers.chatwoot.rule: Host(`chat.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.chatwoot.entrypoints: websecure
       traefik.http.routers.chatwoot.tls: "true"
-      traefik.http.routers.chatwoot.middlewares: security-headers@file,portal-embed@docker
+      traefik.http.routers.chatwoot.middlewares: security-headers@file,chatwoot-embed@docker
+      traefik.http.middlewares.chatwoot-embed.headers.customresponseheaders.X-Frame-Options: ""
+      traefik.http.middlewares.chatwoot-embed.headers.customresponseheaders.Content-Security-Policy: *embed-csp
       traefik.http.services.chatwoot.loadbalancer.server.port: "3000"
 
   chatwoot-worker:
@@ -554,7 +561,9 @@ services:
       traefik.http.routers.n8n.rule: Host(`n8n.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.n8n.entrypoints: websecure
       traefik.http.routers.n8n.tls: "true"
-      traefik.http.routers.n8n.middlewares: security-headers@file,portal-embed@docker
+      traefik.http.routers.n8n.middlewares: security-headers@file,n8n-embed@docker
+      traefik.http.middlewares.n8n-embed.headers.customresponseheaders.X-Frame-Options: ""
+      traefik.http.middlewares.n8n-embed.headers.customresponseheaders.Content-Security-Policy: *embed-csp
       traefik.http.services.n8n.loadbalancer.server.port: "5678"
 
   n8n-worker:
@@ -651,7 +660,9 @@ services:
       traefik.http.routers.grafana.rule: Host(`grafana.${DOMAIN:-itsm.localhost}`)
       traefik.http.routers.grafana.entrypoints: websecure
       traefik.http.routers.grafana.tls: "true"
-      traefik.http.routers.grafana.middlewares: security-headers@file,portal-embed@docker
+      traefik.http.routers.grafana.middlewares: security-headers@file,grafana-embed@docker
+      traefik.http.middlewares.grafana-embed.headers.customresponseheaders.X-Frame-Options: ""
+      traefik.http.middlewares.grafana-embed.headers.customresponseheaders.Content-Security-Policy: *embed-csp
       traefik.http.services.grafana.loadbalancer.server.port: "3000"
 
   loki:

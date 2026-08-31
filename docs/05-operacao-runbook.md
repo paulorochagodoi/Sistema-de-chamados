@@ -103,7 +103,8 @@ make ps
 | n8n não executa workflows | modo fila sem worker | `docker compose --profile automation up -d n8n-worker` |
 | Painel abre mas não lista chamados | tokens do GLPI ausentes | `curl -k https://bridge.<DOMAIN>/readyz`; preencha `GLPI_APP_TOKEN`/`GLPI_USER_TOKEN` e reinicie o bridge |
 | Login do painel recusa credenciais certas | login com credenciais desabilitado no GLPI | *Configurar → Geral → API*: ative "login com credenciais externas" |
-| Serviço abre em branco dentro do painel | serviço recusou o iframe | use "Nova aba"; se for um dos embutíveis, confira o middleware `portal-embed@docker` nos labels do serviço `portal` |
+| Serviço abre em branco dentro do painel | serviço recusou o iframe | use "Nova aba"; se for um dos embutíveis, confira o middleware `<serviço>-embed` nos labels dele |
+| 404 em texto puro (`404 page not found`) em um subdomínio | nenhum roteador casou com o Host | confira o `DOMAIN` do `.env` e, nos logs do Traefik, `middleware ... does not exist` ou `Host(...)`: `make logs SERVICE=traefik` |
 | Menu do painel sem os serviços de um perfil | `PORTAL_PROFILES` desatualizado | ajuste no `.env` e `make restart SERVICE=itsm-bridge` |
 
 ## 4. Backup e restore

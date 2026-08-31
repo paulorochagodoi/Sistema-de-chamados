@@ -26,9 +26,10 @@ faz o bridge aceitar a identidade do cabeçalho `X-Auth-Request-User`. Isso só 
 seguro se o bridge for inalcançável sem passar pelo proxy — qualquer container na
 rede `itsm_edge` pode forjar um cabeçalho. Mantenha desligado se não houver proxy.
 
-O middleware `portal-embed@docker` troca o `X-Frame-Options` dos serviços
-embutidos por `frame-ancestors 'self' https://portal.<DOMAIN> https://<DOMAIN>`:
-o enquadramento passa a ser permitido só ao painel, e não a qualquer origem.
+Cada serviço embutido troca, no seu próprio middleware `<serviço>-embed`, o
+`X-Frame-Options` por `frame-ancestors 'self' https://portal.<DOMAIN>
+https://<DOMAIN>`: o enquadramento passa a ser permitido só ao painel, e não a
+qualquer origem.
 
 **Papéis.** `admin-itsm`, `supervisor`, `agente`, `cliente` — mapeados para
 grupos e projetados para casar com os perfis do GLPI. O princípio é o de menor

@@ -205,13 +205,21 @@ ou em nova aba quando o serviço não aceita ser enquadrado (Keycloak, MinIO,
 Metabase). Reimplementar a UI do GLPI ou do Grafana seria manter um clone
 desatualizado de cada um.
 
-**Como o enquadramento é liberado.** O middleware `portal-embed@docker`
-(definido nos labels do serviço `portal`) remove o `X-Frame-Options` das
-respostas desses serviços e coloca no lugar
-`Content-Security-Policy: frame-ancestors 'self' https://portal.<DOMAIN>
-https://<DOMAIN>` — mais restritivo que o padrão, porque só o painel pode
-enquadrar. Os cookies continuam funcionando porque portal e serviços são
-subdomínios do mesmo site (`SameSite=Lax` não bloqueia same-site).
+**Como o enquadramento é liberado.** Cada serviço embutível define, nos seus
+próprios labels, um middleware `<serviço>-embed` que remove o `X-Frame-Options`
+da resposta e coloca no lugar `Content-Security-Policy: frame-ancestors 'self'
+https://portal.<DOMAIN> https://<DOMAIN>` — mais restritivo que o padrão, porque
+só o painel pode enquadrar. O valor do cabeçalho vem de uma âncora YAML
+(`x-embed-csp`), então há um lugar só para editá-lo.
+
+Middleware por serviço, e não um compartilhado, por um motivo prático: o Traefik
+**desabilita** o roteador que aponta para um middleware inexistente, e o
+roteador desabilitado vira 404. Com a definição no mesmo container do roteador,
+os dois nascem e morrem juntos — nenhum serviço fora do ar consegue derrubar o
+acesso a outro.
+
+Os cookies continuam funcionando porque portal e serviços são subdomínios do
+mesmo site (`SameSite=Lax` não bloqueia same-site).
 
 **Catálogo e status.** O `itsm-bridge` conhece o catálogo
 (`app/portal.py`): slug, categoria, perfil do Compose, URL pública derivada de

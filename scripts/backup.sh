@@ -15,8 +15,10 @@ DEST_ROOT="${1:-backups}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 DEST="$DEST_ROOT/$STAMP"
 
-# shellcheck disable=SC1091
-set -a; source .env; set +a
+set -a
+# shellcheck disable=SC1091  # o .env não existe no lint, só em execução
+source .env
+set +a
 
 mkdir -p "$DEST"
 echo "==> destino: $DEST"

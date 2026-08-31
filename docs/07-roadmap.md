@@ -13,13 +13,16 @@ Legenda: ✅ entregue neste repositório · 🔧 configuração na UI do produto
 | MinIO com buckets, política de retenção e nenhum bucket público | ✅ |
 | Keycloak com realm, papéis, MFA e política de senha | ✅ |
 | Traefik com TLS, HSTS e redirecionamento | ✅ |
+| Painel unificado (portal): menu único, fila de chamados, SLA, faturamento e status | ✅ |
+| Instalação e configuração automatizadas no Ubuntu | ✅ (`scripts/install-ubuntu.sh`) |
 | Segregação de rede (dados sem rota externa) | ✅ |
 | Entidades por cliente (multi-tenant) | 🔧 criar na UI do GLPI |
 | SSO OIDC ligado no GLPI | 🔧 instalar plugin e apontar para o realm |
 | Catálogo de serviços e KB | 🔧 conteúdo é do negócio |
 
-**Critério de aceite:** `make up && make smoke` verde; login no GLPI; abertura
-de chamado em uma entidade de cliente; anexo salvo.
+**Critério de aceite:** `make up && make smoke` verde; login no painel em
+`https://<DOMAIN>/` com um usuário do GLPI; abertura de chamado em uma entidade
+de cliente pelo painel; anexo salvo.
 
 ## Fase 2 — Acesso remoto e monitoramento
 

@@ -14,6 +14,22 @@
 * eventos de login e eventos administrativos habilitados com retenção de 90 dias
   (rastreabilidade de alteração de permissão).
 
+**Painel unificado.** O portal fica exposto no domínio raiz e lê dados de
+chamados: toda a API `/api/portal` exige sessão. A autenticação valida usuário e
+senha no próprio GLPI e devolve um JWT HS256 (`PORTAL_SECRET`, validade
+`PORTAL_SESSION_MINUTES`) — sem base de usuários paralela e sem senha
+armazenada no painel. A rota do portal no Traefik carrega o middleware
+`rate-limit@file`, que limita as tentativas de login.
+
+Com um proxy OIDC à frente (oauth2-proxy, Authelia), `PORTAL_TRUST_FORWARDED_AUTH=true`
+faz o bridge aceitar a identidade do cabeçalho `X-Auth-Request-User`. Isso só é
+seguro se o bridge for inalcançável sem passar pelo proxy — qualquer container na
+rede `itsm_edge` pode forjar um cabeçalho. Mantenha desligado se não houver proxy.
+
+O middleware `portal-embed@docker` troca o `X-Frame-Options` dos serviços
+embutidos por `frame-ancestors 'self' https://portal.<DOMAIN> https://<DOMAIN>`:
+o enquadramento passa a ser permitido só ao painel, e não a qualquer origem.
+
 **Papéis.** `admin-itsm`, `supervisor`, `agente`, `cliente` — mapeados para
 grupos e projetados para casar com os perfis do GLPI. O princípio é o de menor
 privilégio: o usuário de serviço da API tem permissão de criar chamados, não de
@@ -124,7 +140,12 @@ surpresa:
 1. **Criptografia dos dumps** no `backup.sh` (hoje: gzip sem cifra).
 2. **SSO efetivo no GLPI** — o realm está pronto; falta instalar e configurar o
    plugin OIDC na instância (requer a UI do GLPI no ar).
-3. **Rate limit por rota** — o middleware existe, mas não está aplicado nas
-   rotas de login; avalie o volume real antes de calibrar.
-4. **WAF/ModSecurity** à frente do Traefik, se o portal do cliente ficar
-   exposto na internet pública.
+3. **Rate limit por rota** — aplicado na rota do portal (que inclui o login do
+   painel); as rotas de login dos demais serviços seguem sem limite próprio.
+   Calibre `rate-limit` conforme o volume real.
+4. **WAF/ModSecurity** à frente do Traefik, se o portal ficar exposto na
+   internet pública.
+5. **Permissão por usuário no painel** — o bridge opera o GLPI com a conta de
+   serviço; o usuário autenticado define autoria, não escopo de permissão. Para
+   escopo por pessoa, coloque o portal atrás do SSO e restrinja o perfil da
+   conta de serviço.

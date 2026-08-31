@@ -33,6 +33,30 @@ jobs:
       - name: Build da imagem
         run: docker build -t itsm-bridge:ci .
 
+  portal:
+    name: portal (build do painel)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/portal
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/portal/package-lock.json
+
+      - name: Instala dependências
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Build da imagem
+        run: docker build -t itsm-portal:ci .
+
   infra:
     name: Infraestrutura (Compose, YAML, JSON, shell)
     runs-on: ubuntu-latest

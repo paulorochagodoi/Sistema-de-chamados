@@ -1,17 +1,64 @@
 # Runbook de operação
 
+## 0. Instalação em um Ubuntu novo
+
+Em um servidor Ubuntu 22.04/24.04 recém-provisionado, um comando faz tudo —
+dependências, Docker Engine, `.env` com segredos, firewall, subida dos serviços,
+unidade systemd e backup agendado:
+
+```bash
+git clone <repo> /opt/itsm && cd /opt/itsm
+sudo ./scripts/install-ubuntu.sh --domain itsm.acme.com --email ti@acme.com \
+     --profiles core,rmm,observability --tls --yes --smoke
+```
+
+| Opção | Efeito |
+|---|---|
+| `--profiles` | perfis a subir; sem ela, reaproveita o que já está no `.env` |
+| `--tls` | usa Let's Encrypt (exige DNS público apontando para o host) |
+| `--no-firewall` / `--no-systemd` / `--no-backup-cron` | pula a etapa |
+| `--no-start` | prepara tudo sem subir containers |
+| `--skip-docker` | o host já tem Docker |
+| `--smoke` | roda `scripts/smoke-test.sh` ao final |
+| `-y` | não pergunta nada |
+
+O script é idempotente: rodar de novo atualiza a instalação sem recriar
+segredos. Ele **não** sorteia senhas novas em cima de bancos existentes.
+
+O que ele deixa configurado no host:
+
+* Docker Engine + plugin Compose do repositório oficial, com rotação de log em
+  `/etc/docker/daemon.json` e o usuário do `sudo` no grupo `docker`;
+* `/etc/sysctl.d/99-itsm.conf` (`vm.overcommit_memory=1` para o Redis,
+  `net.core.somaxconn=1024`);
+* UFW liberando SSH, 80/443 e, com o perfil `rmm`, 21115-21119/tcp e 21116/udp;
+* `itsm.service` (`systemctl start|stop|status itsm`), que reconcilia a stack no
+  boot;
+* `/etc/cron.d/itsm-backup`, backup diário às 02:30 em `/var/log/itsm-backup.log`.
+
+Só a configuração, sem tocar no host:
+
+```bash
+./scripts/configure.sh --domain itsm.acme.com --email ti@acme.com --yes
+./scripts/configure.sh --glpi-app-token <tok> --glpi-user-token <tok> --yes
+```
+
 ## 1. Subir o ambiente
 
 ```bash
 cp .env.example .env
 ./scripts/gen-secrets.sh          # gera todos os "troque-me-*"
 # ajuste DOMAIN, ACME_EMAIL e TZ no .env
+# (ou, de uma vez: ./scripts/configure.sh)
 
 make up                            # perfil core (Fase 1)
 make up-rmm                        # + MeshCentral e RustDesk (Fase 2)
 make up-all                        # todos os perfis
 make ps
 ```
+
+Primeiro acesso do time: `https://<DOMAIN>/` — o painel unificado. Ele pede
+usuário e senha do GLPI e, dali, dá acesso a todos os serviços da stack.
 
 Primeiro acesso: `https://glpi.<DOMAIN>` (em dev o certificado é auto-assinado;
 aceite o aviso). O GLPI instala o schema sozinho no primeiro start.
@@ -34,9 +81,9 @@ docker compose --env-file .env \
   --profile core up -d
 ```
 
-Requer DNS dos subdomínios (`glpi.`, `sso.`, `chat.`, `rmm.`, `n8n.`, `bi.`,
-`s3.`, `minio.`, `bridge.`, `grafana.`) apontando para o host e portas 80/443
-acessíveis pela internet.
+Requer o domínio raiz (painel) e os subdomínios (`portal.`, `glpi.`, `sso.`,
+`chat.`, `rmm.`, `n8n.`, `bi.`, `s3.`, `minio.`, `bridge.`, `grafana.`)
+apontando para o host, e portas 80/443 acessíveis pela internet.
 
 ## 3. Verificação e diagnóstico
 
@@ -54,6 +101,10 @@ make ps
 | Chamados duplicados por alerta repetido | `alert_id` instável na origem | garanta id estável no RMM; o dedupe depende dele |
 | Sessão do GLPI caindo com múltiplas réplicas | sessão em disco local | configure o handler de sessão no Redis ou fixe `--scale glpi=1` |
 | n8n não executa workflows | modo fila sem worker | `docker compose --profile automation up -d n8n-worker` |
+| Painel abre mas não lista chamados | tokens do GLPI ausentes | `curl -k https://bridge.<DOMAIN>/readyz`; preencha `GLPI_APP_TOKEN`/`GLPI_USER_TOKEN` e reinicie o bridge |
+| Login do painel recusa credenciais certas | login com credenciais desabilitado no GLPI | *Configurar → Geral → API*: ative "login com credenciais externas" |
+| Serviço abre em branco dentro do painel | serviço recusou o iframe | use "Nova aba"; se for um dos embutíveis, confira o middleware `portal-embed@docker` nos labels do serviço `portal` |
+| Menu do painel sem os serviços de um perfil | `PORTAL_PROFILES` desatualizado | ajuste no `.env` e `make restart SERVICE=itsm-bridge` |
 
 ## 4. Backup e restore
 
@@ -137,6 +188,7 @@ ENTRYPOINT ["/opt/keycloak/bin/kc.sh", "start", "--optimized"]
 | `BRIDGE_*_WEBHOOK_SECRET` | novo valor no `.env` **e** na origem do webhook | alertas rejeitados até alinhar |
 | `N8N_ENCRYPTION_KEY` | **não rotacione sem exportar credenciais antes** | perda das credenciais salvas |
 | Senhas de banco | alterar no banco e no `.env`, recriar os serviços | downtime curto |
+| `PORTAL_SECRET` | novo valor no `.env` e `make restart SERVICE=itsm-bridge` | todas as sessões do painel caem (é o efeito desejado ao revogar acesso) |
 
 ## 9. Limpeza
 

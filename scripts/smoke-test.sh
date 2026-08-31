@@ -6,13 +6,15 @@
 # Sai com código != 0 se algum teste essencial falhar — serve para CI/CD.
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 COMPOSE="docker compose --env-file .env -f deploy/compose/docker-compose.yml"
 falhas=0
 
-# shellcheck disable=SC1091
-set -a; source .env 2>/dev/null || true; set +a
+set -a
+# shellcheck disable=SC1091  # o .env não existe no lint, só em execução
+source .env 2>/dev/null || true
+set +a
 DOMAIN="${DOMAIN:-itsm.localhost}"
 
 check() {
@@ -26,6 +28,7 @@ check() {
   fi
 }
 
+# shellcheck disable=SC2317  # chamada indiretamente, via check()
 http() {
   # -k: em dev o Traefik serve certificado auto-assinado
   curl -fsSk --max-time 10 "$@"
@@ -46,6 +49,9 @@ check "Redis respondendo PING" \
 
 echo
 echo "== HTTP (via Traefik) =="
+check "portal responde"        http -o /dev/null "https://portal.$DOMAIN/"
+check "portal no domínio raiz" http -o /dev/null "https://$DOMAIN/"
+check "portal exige login"     bash -c "[ \"\$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \"https://portal.$DOMAIN/api/portal/services\")\" = 401 ]"
 check "GLPI responde"          http -o /dev/null "https://glpi.$DOMAIN/"
 check "Keycloak responde"      http -o /dev/null "https://sso.$DOMAIN/realms/${KEYCLOAK_REALM:-itsm}/.well-known/openid-configuration"
 check "MinIO console responde" http -o /dev/null "https://minio.$DOMAIN/"

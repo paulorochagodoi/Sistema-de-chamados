@@ -10,9 +10,9 @@ ALL_PROFILES := --profile core --profile rmm --profile omnichannel \
                 --profile automation --profile bi --profile observability
 
 .DEFAULT_GOAL := help
-.PHONY: help env up up-rmm up-omnichannel up-automation up-bi up-observability \
-        up-all up-tls down clean ps logs restart smoke backup test lint \
-        validate build-bridge
+.PHONY: help env configure install up up-rmm up-omnichannel up-automation \
+        up-bi up-observability up-all up-tls down clean ps logs restart smoke \
+        backup test lint validate build-bridge build-portal
 
 help: ## Lista os alvos disponíveis
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -21,6 +21,12 @@ help: ## Lista os alvos disponíveis
 env: ## Cria o .env a partir do exemplo e gera os segredos
 	@test -f $(ENV_FILE) || cp .env.example $(ENV_FILE)
 	@./scripts/gen-secrets.sh
+
+configure: ## Ajusta o .env (domínio, e-mail, fuso, perfis, tokens do GLPI)
+	@./scripts/configure.sh
+
+install: ## Instala tudo no Ubuntu (Docker, firewall, systemd) e sobe a stack
+	@./scripts/install-ubuntu.sh
 
 up: env ## Sobe o núcleo (Fase 1)
 	$(COMPOSE) --profile core up -d
@@ -64,6 +70,9 @@ restart: ## Reinicia um serviço: make restart SERVICE=itsm-bridge
 
 build-bridge: ## Recompila a imagem do itsm-bridge
 	$(COMPOSE) build itsm-bridge
+
+build-portal: ## Recompila a imagem do portal (painel unificado)
+	$(COMPOSE) build portal
 
 smoke: ## Verificação pós-deploy
 	@./scripts/smoke-test.sh

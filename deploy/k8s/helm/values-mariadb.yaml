@@ -1,0 +1,40 @@
+# MariaDB para o GLPI (chart bitnami/mariadb).
+#
+#   helm install mariadb bitnami/mariadb -n itsm-data -f values-mariadb.yaml
+#
+# Réplica de leitura habilitada para relatórios pesados não competirem com a
+# operação transacional (requisito 4.3 da especificação).
+architecture: replication
+
+auth:
+  database: glpi
+  username: glpi
+  existingSecret: mariadb-credentials
+
+primary:
+  configuration: |-
+    [mysqld]
+    character-set-server=utf8mb4
+    collation-server=utf8mb4_unicode_ci
+    transaction-isolation=READ-COMMITTED
+    innodb_buffer_pool_size=2G
+    max_allowed_packet=64M
+    log_bin_trust_function_creators=1
+  persistence:
+    size: 100Gi
+  resources:
+    requests: { cpu: "1", memory: 4Gi }
+    limits: { cpu: "4", memory: 8Gi }
+
+secondary:
+  replicaCount: 1
+  persistence:
+    size: 100Gi
+  resources:
+    requests: { cpu: 500m, memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true

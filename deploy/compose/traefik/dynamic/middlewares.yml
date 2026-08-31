@@ -1,0 +1,44 @@
+# Traefik — configuração dinâmica (middlewares compartilhados)
+http:
+  middlewares:
+    security-headers:
+      headers:
+        frameDeny: false            # o MeshCentral é embutido em iframe no chamado
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: strict-origin-when-cross-origin
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        customRequestHeaders:
+          X-Forwarded-Proto: https
+
+    # Proteção de força bruta nos portais expostos (ajuste conforme a carga)
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1s
+
+    # Restringe rotas administrativas a redes internas/VPN
+    internal-only:
+      ipAllowList:
+        sourceRange:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+          - 127.0.0.1/32
+
+    compress:
+      compress: {}
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: false
+      cipherSuites:
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305

@@ -1,0 +1,22 @@
+# MinIO (chart bitnami/minio) — anexos, gravações de sessão remota e backups.
+#
+#   helm install minio bitnami/minio -n itsm-data -f values-minio.yaml
+mode: distributed
+statefulset:
+  replicaCount: 4
+
+auth:
+  existingSecret: minio-credentials
+
+persistence:
+  size: 200Gi
+
+defaultBuckets: "glpi-attachments,chatwoot-uploads,session-recordings,backups"
+
+resources:
+  requests: { cpu: 250m, memory: 1Gi }
+  limits: { cpu: "2", memory: 4Gi }
+
+metrics:
+  serviceMonitor:
+    enabled: true

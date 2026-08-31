@@ -1,0 +1,99 @@
+# itsm-bridge — integrações próprias. Stateless: escala à vontade, desde que o
+# Redis esteja configurado (a correlação alerta->chamado é compartilhada nele).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itsm-bridge
+  namespace: itsm
+  labels:
+    app.kubernetes.io/name: itsm-bridge
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: itsm-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: itsm-bridge
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: bridge
+          image: ghcr.io/OWNER/itsm-bridge:1.0.0   # publique sua imagem e ajuste aqui
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: BRIDGE_GLPI_API_URL
+              value: http://glpi.itsm.svc.cluster.local/apirest.php
+            - name: BRIDGE_GLPI_APP_TOKEN
+              valueFrom:
+                secretKeyRef: { name: itsm-bridge, key: glpi-app-token }
+            - name: BRIDGE_GLPI_USER_TOKEN
+              valueFrom:
+                secretKeyRef: { name: itsm-bridge, key: glpi-user-token }
+            - name: BRIDGE_RMM_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef: { name: itsm-bridge, key: rmm-webhook-secret }
+            - name: BRIDGE_CHATWOOT_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef: { name: itsm-bridge, key: chatwoot-webhook-secret }
+            - name: BRIDGE_REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: itsm-bridge, key: redis-url }
+            - name: TZ
+              value: America/Sao_Paulo
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itsm-bridge
+  namespace: itsm
+spec:
+  selector:
+    app.kubernetes.io/name: itsm-bridge
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: itsm-bridge
+  namespace: itsm
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: itsm-bridge
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

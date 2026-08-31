@@ -1,0 +1,125 @@
+{
+  "uid": "itsm-overview",
+  "title": "ITSM — Visão Geral da Plataforma",
+  "tags": ["itsm", "sla"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Serviços indisponíveis",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "count(up == 0)", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Chamados com SLA em risco",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "sum(itsm_tickets_sla_at_risk)", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Chamados abertos automaticamente por alertas do RMM",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (severity) (increase(itsm_bridge_tickets_created_total[1h]))",
+          "legendFormat": "{{severity}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Latência p95 por serviço (requisito: < 500ms)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, service) (rate(traefik_service_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "CPU por container",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[5m]))",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "Erros recentes no stack",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+      "targets": [
+        { "expr": "{stack=\"itsm\"} |~ \"(?i)(error|exception|fatal)\"", "refId": "A" }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      },
+      {
+        "name": "DS_LOKI",
+        "type": "datasource",
+        "query": "loki",
+        "current": { "text": "Loki", "value": "Loki" }
+      }
+    ]
+  }
+}

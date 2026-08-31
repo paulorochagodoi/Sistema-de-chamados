@@ -1,0 +1,169 @@
+{
+  "name": "02 — Escalonamento de SLA em risco",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] }
+      },
+      "id": "agenda",
+      "name": "A cada 15 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-380, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GLPI_API_URL }}/initSession",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "App-Token", "value": "={{ $env.GLPI_APP_TOKEN }}" },
+            { "name": "Authorization", "value": "=user_token {{ $env.GLPI_USER_TOKEN }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "sessao",
+      "name": "Abre sessão no GLPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GLPI_API_URL }}/search/Ticket",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "criteria[0][field]", "value": "12" },
+            { "name": "criteria[0][searchtype]", "value": "equals" },
+            { "name": "criteria[0][value]", "value": "notold" },
+            { "name": "forcedisplay[0]", "value": "2" },
+            { "name": "forcedisplay[1]", "value": "1" },
+            { "name": "forcedisplay[2]", "value": "18" },
+            { "name": "forcedisplay[3]", "value": "5" },
+            { "name": "range", "value": "0-199" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "App-Token", "value": "={{ $env.GLPI_APP_TOKEN }}" },
+            { "name": "Session-Token", "value": "={{ $json.session_token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "busca",
+      "name": "Chamados abertos com prazo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [60, 0]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "split",
+      "name": "Um item por chamado",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [280, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BRIDGE_URL }}/api/sla/at-risk",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ due_at: $json['18'], threshold_minutes: 60, business_hours: { start: '08:00', end: '18:00', workdays: [0,1,2,3,4] } }) }}",
+        "options": {}
+      },
+      "id": "avalia",
+      "name": "Avalia risco de SLA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.at_risk }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filtra",
+      "name": "Está em risco?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 0]
+    },
+    {
+      "parameters": {
+        "content": "=SLA em risco no chamado #{{ $('Um item por chamado').item.json['2'] }} — faltam {{ $json.business_minutes_remaining }} minutos úteis.",
+        "options": {}
+      },
+      "id": "escala",
+      "name": "Escala para o supervisor",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [940, -80],
+      "notes": "Troque por e-mail/Slack/WhatsApp e, se quiser, um PUT em /Ticket para elevar a prioridade."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GLPI_API_URL }}/killSession",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "App-Token", "value": "={{ $env.GLPI_APP_TOKEN }}" },
+            { "name": "Session-Token", "value": "={{ $('Abre sessão no GLPI').item.json.session_token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "encerra",
+      "name": "Encerra sessão",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 120]
+    }
+  ],
+  "connections": {
+    "A cada 15 minutos": {
+      "main": [[{ "node": "Abre sessão no GLPI", "type": "main", "index": 0 }]]
+    },
+    "Abre sessão no GLPI": {
+      "main": [[{ "node": "Chamados abertos com prazo", "type": "main", "index": 0 }]]
+    },
+    "Chamados abertos com prazo": {
+      "main": [[{ "node": "Um item por chamado", "type": "main", "index": 0 }]]
+    },
+    "Um item por chamado": {
+      "main": [[{ "node": "Avalia risco de SLA", "type": "main", "index": 0 }]]
+    },
+    "Avalia risco de SLA": {
+      "main": [[{ "node": "Está em risco?", "type": "main", "index": 0 }]]
+    },
+    "Está em risco?": {
+      "main": [
+        [{ "node": "Escala para o supervisor", "type": "main", "index": 0 }],
+        [{ "node": "Encerra sessão", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Sao_Paulo" },
+  "tags": [{ "name": "sla" }]
+}

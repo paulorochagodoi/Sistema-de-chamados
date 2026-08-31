@@ -1,0 +1,137 @@
+{
+  "name": "03 — Faturamento mensal a partir dos apontamentos",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 6 1 * *" }
+          ]
+        }
+      },
+      "id": "agenda",
+      "name": "Todo dia 1º às 06:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-420, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Período fechado: mês anterior ao da execução\nconst hoje = new Date();\nconst inicio = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);\nconst fim = new Date(hoje.getFullYear(), hoje.getMonth(), 0);\nconst iso = (d) => d.toISOString().slice(0, 10);\nreturn [{ json: { period_start: iso(inicio), period_end: iso(fim) } }];"
+      },
+      "id": "periodo",
+      "name": "Calcula o período",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-200, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GLPI_API_URL }}/initSession",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "App-Token", "value": "={{ $env.GLPI_APP_TOKEN }}" },
+            { "name": "Authorization", "value": "=user_token {{ $env.GLPI_USER_TOKEN }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "sessao",
+      "name": "Abre sessão no GLPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [20, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GLPI_API_URL }}/search/TicketTask",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "criteria[0][field]", "value": "5" },
+            { "name": "criteria[0][searchtype]", "value": "morethan" },
+            { "name": "criteria[0][value]", "value": "0" },
+            { "name": "range", "value": "0-999" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "App-Token", "value": "={{ $env.GLPI_APP_TOKEN }}" },
+            { "name": "Session-Token", "value": "={{ $json.session_token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "apontamentos",
+      "name": "Apontamentos do período",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "notes": "Ajuste os searchoptions conforme o mapeamento de duração/entidade da sua instância."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Agrupa os apontamentos por contrato e monta o payload do itsm-bridge.\n// O vínculo chamado -> contrato vem do campo customizado/entidade do GLPI.\nconst periodo = $('Calcula o período').first().json;\nconst porContrato = new Map();\n\nfor (const item of $input.all()) {\n  const t = item.json;\n  const contratoId = t.contract_id || t['80'] || 'SEM-CONTRATO';\n  if (!porContrato.has(contratoId)) porContrato.set(contratoId, []);\n  porContrato.get(contratoId).push({\n    ticket_id: Number(t['2'] ?? t.tickets_id ?? 0),\n    minutes: Math.round(Number(t['5'] ?? t.actiontime ?? 0) / 60),\n    billable: true,\n    performed_at: (t['4'] ?? periodo.period_start).slice(0, 10),\n  });\n}\n\nreturn [...porContrato.entries()].map(([contrato, entradas]) => ({\n  json: {\n    contract_id: contrato,\n    period_start: periodo.period_start,\n    period_end: periodo.period_end,\n    time_entries: entradas,\n  },\n}));"
+      },
+      "id": "agrupa",
+      "name": "Agrupa por contrato",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BRIDGE_URL }}/api/billing/invoices/preview",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contract: $json.contract, period_start: $json.period_start, period_end: $json.period_end, time_entries: $json.time_entries }) }}",
+        "options": {}
+      },
+      "id": "previa",
+      "name": "Calcula a prévia da fatura",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 0],
+      "notes": "O objeto 'contract' vem do cadastro de contratos (GLPI ou ERPNext); enriqueça antes deste nó."
+    },
+    {
+      "parameters": {
+        "content": "=Fatura de {{ $json.client }} — total {{ $json.currency }} {{ $json.total }} ({{ $json.billable_minutes }} min billáveis). Revisar e enviar ao emissor fiscal.",
+        "options": {}
+      },
+      "id": "revisao",
+      "name": "Envia para revisão humana",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 0],
+      "notes": "Ponto de aprovação antes de emitir nota fiscal no ERPNext/gateway."
+    }
+  ],
+  "connections": {
+    "Todo dia 1º às 06:00": {
+      "main": [[{ "node": "Calcula o período", "type": "main", "index": 0 }]]
+    },
+    "Calcula o período": {
+      "main": [[{ "node": "Abre sessão no GLPI", "type": "main", "index": 0 }]]
+    },
+    "Abre sessão no GLPI": {
+      "main": [[{ "node": "Apontamentos do período", "type": "main", "index": 0 }]]
+    },
+    "Apontamentos do período": {
+      "main": [[{ "node": "Agrupa por contrato", "type": "main", "index": 0 }]]
+    },
+    "Agrupa por contrato": {
+      "main": [[{ "node": "Calcula a prévia da fatura", "type": "main", "index": 0 }]]
+    },
+    "Calcula a prévia da fatura": {
+      "main": [[{ "node": "Envia para revisão humana", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Sao_Paulo" },
+  "tags": [{ "name": "faturamento" }]
+}

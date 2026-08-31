@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  bridge:
+    name: itsm-bridge (testes e lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/itsm-bridge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/itsm-bridge/requirements-dev.txt
+
+      - name: Instala dependências
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Testes
+        run: pytest
+
+      - name: Build da imagem
+        run: docker build -t itsm-bridge:ci .
+
+  infra:
+    name: Infraestrutura (Compose, YAML, JSON, shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Valida o Compose (todos os perfis)
+        run: |
+          docker compose --env-file .env.example \
+            -f deploy/compose/docker-compose.yml \
+            --profile core --profile rmm --profile omnichannel \
+            --profile automation --profile bi --profile observability config -q
+
+      - name: Valida o overlay de TLS
+        run: |
+          docker compose --env-file .env.example \
+            -f deploy/compose/docker-compose.yml \
+            -f deploy/compose/docker-compose.tls.yml \
+            --profile core config -q
+
+      - name: Valida YAML e JSON
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys, yaml
+          erros = 0
+          for p in list(pathlib.Path('.').rglob('*.y*ml')):
+              if '.git' in p.parts:
+                  continue
+              try:
+                  list(yaml.safe_load_all(p.read_text()))
+              except Exception as exc:
+                  print(f'YAML inválido: {p}: {exc}'); erros += 1
+          for p in pathlib.Path('.').rglob('*.json'):
+              if '.git' in p.parts:
+                  continue
+              try:
+                  json.loads(p.read_text())
+              except Exception as exc:
+                  print(f'JSON inválido: {p}: {exc}'); erros += 1
+          sys.exit(1 if erros else 0)
+          PY
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh \
+            deploy/compose/postgres/init/*.sh \
+            deploy/compose/mariadb/init/*.sh \
+            deploy/compose/minio/*.sh
+
+      - name: Nenhum segredo real ou placeholder nos manifests
+        run: |
+          # placeholders só podem existir nos arquivos de exemplo
+          if git grep -n -E "troque-me|TROQUE-ESTE" -- \
+               'deploy/compose/docker-compose*.yml' \
+               'deploy/k8s/base/*.yaml' \
+               ':!deploy/k8s/base/secrets.example.yaml'; then
+            echo "Placeholder de segredo em manifest de deploy"
+            exit 1
+          fi
+          # o .env preenchido nunca pode ser versionado
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo ".env versionado — remova do controle de versão"
+            exit 1
+          fi

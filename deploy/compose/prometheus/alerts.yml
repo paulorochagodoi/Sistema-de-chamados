@@ -1,0 +1,80 @@
+groups:
+  - name: disponibilidade
+    rules:
+      - alert: ServicoIndisponivel
+        expr: up == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Serviço {{ $labels.job }} indisponível"
+          description: "O alvo {{ $labels.instance }} não responde há 3 minutos. SLA de disponibilidade do núcleo ITSM é 99,5%."
+
+      - alert: ContainerReiniciandoEmLoop
+        expr: increase(container_start_time_seconds[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} reiniciando em loop"
+
+  - name: capacidade
+    rules:
+      - alert: CPUAltaNoContainer
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[5m]) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU acima de 90% em {{ $labels.name }}"
+          description: "Candidato a escalar horizontalmente (HPA em Kubernetes, --scale no Compose)."
+
+      - alert: MemoriaAltaNoContainer
+        expr: container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""} > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memória acima de 90% em {{ $labels.name }}"
+
+      - alert: DiscoQuaseCheio
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) < 0.10
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Menos de 10% livre em {{ $labels.mountpoint }}"
+
+  - name: latencia
+    rules:
+      - alert: LatenciaAcimaDoRequisito
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, service) (rate(traefik_service_request_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 acima de 500ms em {{ $labels.service }}"
+          description: "Requisito não-funcional: abertura de chamado e resposta de API < 500ms sob carga normal."
+
+  - name: negocio
+    rules:
+      - alert: SLAEmRisco
+        expr: itsm_tickets_sla_at_risk > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} chamado(s) com SLA em risco"
+          description: "Métrica publicada pelo itsm-bridge a partir dos prazos calculados por contrato."
+
+      - alert: FalhaAoAbrirChamadoDeAlerta
+        expr: increase(itsm_bridge_ticket_failures_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertas do RMM não estão virando chamado"
+          description: "O itsm-bridge falhou ao criar chamados no GLPI — monitoramento proativo cego."

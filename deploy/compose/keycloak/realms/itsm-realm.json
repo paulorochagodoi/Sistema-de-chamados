@@ -1,0 +1,139 @@
+{
+  "realm": "itsm",
+  "displayName": "ITSM — Service Desk",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "verifyEmail": true,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "failureFactor": 5,
+  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and passwordHistory(5)",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 3600,
+  "ssoSessionMaxLifespan": 36000,
+  "internationalizationEnabled": true,
+  "supportedLocales": ["pt-BR", "en"],
+  "defaultLocale": "pt-BR",
+  "eventsEnabled": true,
+  "eventsExpiration": 7776000,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "roles": {
+    "realm": [
+      { "name": "admin-itsm", "description": "Administração da plataforma (configuração, entidades, integrações)" },
+      { "name": "supervisor", "description": "Supervisão de equipe: fila, redistribuição, relatórios" },
+      { "name": "agente", "description": "Técnico/atendente: trata chamados e executa acesso remoto" },
+      { "name": "cliente", "description": "Usuário do cliente: abre e acompanha os próprios chamados no portal" }
+    ]
+  },
+  "groups": [
+    { "name": "agentes", "realmRoles": ["agente"] },
+    { "name": "supervisores", "realmRoles": ["agente", "supervisor"] },
+    { "name": "administradores", "realmRoles": ["agente", "supervisor", "admin-itsm"] },
+    { "name": "clientes", "realmRoles": ["cliente"] }
+  ],
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10
+    },
+    {
+      "alias": "UPDATE_PASSWORD",
+      "name": "Update Password",
+      "providerId": "UPDATE_PASSWORD",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 30
+    },
+    {
+      "alias": "VERIFY_EMAIL",
+      "name": "Verify Email",
+      "providerId": "VERIFY_EMAIL",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 50
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "glpi",
+      "name": "GLPI — núcleo ITSM",
+      "description": "Login OIDC do GLPI (plugin oauthimap/singlesignon)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "TROQUE-ESTE-SECRET-GLPI",
+      "redirectUris": ["https://glpi.itsm.localhost/*"],
+      "webOrigins": ["https://glpi.itsm.localhost"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "attributes": { "post.logout.redirect.uris": "https://glpi.itsm.localhost/*" }
+    },
+    {
+      "clientId": "chatwoot",
+      "name": "Chatwoot — omnichannel",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "secret": "TROQUE-ESTE-SECRET-CHATWOOT",
+      "redirectUris": ["https://chat.itsm.localhost/*"],
+      "webOrigins": ["https://chat.itsm.localhost"]
+    },
+    {
+      "clientId": "meshcentral",
+      "name": "MeshCentral — RMM e acesso remoto",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "secret": "TROQUE-ESTE-SECRET-MESHCENTRAL",
+      "redirectUris": ["https://rmm.itsm.localhost/*"],
+      "webOrigins": ["https://rmm.itsm.localhost"]
+    },
+    {
+      "clientId": "metabase",
+      "name": "Metabase — BI",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "secret": "TROQUE-ESTE-SECRET-METABASE",
+      "redirectUris": ["https://bi.itsm.localhost/*"],
+      "webOrigins": ["https://bi.itsm.localhost"]
+    },
+    {
+      "clientId": "itsm-bridge",
+      "name": "itsm-bridge — serviço de integração",
+      "description": "Client service-account usado para validar tokens de máquina",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "TROQUE-ESTE-SECRET-BRIDGE"
+    }
+  ],
+  "clientScopes": [],
+  "smtpServer": {},
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+    "xFrameOptions": "SAMEORIGIN",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  }
+}

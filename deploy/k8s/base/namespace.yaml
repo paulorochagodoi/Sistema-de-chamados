@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: itsm
+  labels:
+    app.kubernetes.io/part-of: itsm
+    # os dados ficam em namespace separado (ver 04-4.4 da especificação)
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: itsm-data
+  labels:
+    app.kubernetes.io/part-of: itsm
+    pod-security.kubernetes.io/enforce: restricted

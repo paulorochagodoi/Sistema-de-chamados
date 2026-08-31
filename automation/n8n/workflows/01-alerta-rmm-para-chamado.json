@@ -1,0 +1,119 @@
+{
+  "name": "01 — Alerta do RMM vira chamado",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rmm-alert",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-rmm",
+      "name": "Webhook do RMM",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-360, 0],
+      "webhookId": "rmm-alert"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.severity }}",
+              "rightValue": "info",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filtra-ruido",
+      "name": "Descarta alertas informativos",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-140, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BRIDGE_URL }}/webhooks/rmm/alert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-ITSM-Signature", "value": "={{ $json.signature }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": { "response": { "response": { "neverError": false } } }
+      },
+      "id": "abre-chamado",
+      "name": "Abre chamado via itsm-bridge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [80, -80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "created",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "leftValue": "={{ $('Webhook do RMM').item.json.body.severity }}",
+              "rightValue": "critical",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "critico",
+      "name": "É crítico e novo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [300, -80]
+    },
+    {
+      "parameters": {
+        "content": "=Chamado #{{ $json.ticket_id }} aberto automaticamente.\nHost: {{ $('Webhook do RMM').item.json.body.hostname }}\nMonitor: {{ $('Webhook do RMM').item.json.body.check }}",
+        "options": {}
+      },
+      "id": "notifica-plantao",
+      "name": "Notifica o plantão",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [520, -160],
+      "notes": "Substitua por Slack/Teams/WhatsApp conforme o canal do plantão."
+    }
+  ],
+  "connections": {
+    "Webhook do RMM": {
+      "main": [[{ "node": "Descarta alertas informativos", "type": "main", "index": 0 }]]
+    },
+    "Descarta alertas informativos": {
+      "main": [
+        [{ "node": "Abre chamado via itsm-bridge", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Abre chamado via itsm-bridge": {
+      "main": [[{ "node": "É crítico e novo?", "type": "main", "index": 0 }]]
+    },
+    "É crítico e novo?": {
+      "main": [[{ "node": "Notifica o plantão", "type": "main", "index": 0 }], []]
+    }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Sao_Paulo" },
+  "tags": [{ "name": "rmm" }, { "name": "chamados" }]
+}

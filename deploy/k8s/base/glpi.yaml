@@ -1,0 +1,198 @@
+# GLPI — núcleo ITSM.
+#
+# Dois Deployments a partir da mesma imagem:
+#   glpi       web, escalável por HPA (cron desligado)
+#   glpi-cron  worker único de tarefas agendadas (replicas fixas em 1)
+#
+# Rodar cron em cada réplica web duplicaria envio de e-mail, escalonamento de
+# SLA e sincronização de inventário — por isso ele é isolado.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: glpi-data
+  namespace: itsm
+spec:
+  accessModes:
+    # ReadWriteMany é obrigatório: web e cron compartilham /var/glpi.
+    # Sem storage class RWX (NFS, CephFS, EFS...), mantenha replicas=1 no web.
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glpi
+  namespace: itsm
+  labels:
+    app.kubernetes.io/name: glpi
+    app.kubernetes.io/component: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: glpi
+      app.kubernetes.io/component: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: glpi
+        app.kubernetes.io/component: web
+    spec:
+      securityContext:
+        fsGroup: 33
+      containers:
+        - name: glpi
+          image: glpi/glpi:10.0.26
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: GLPI_CRONTAB_ENABLED
+              value: "0"
+            - name: GLPI_DB_HOST
+              value: mariadb.itsm-data.svc.cluster.local
+            - name: GLPI_DB_NAME
+              value: glpi
+            - name: GLPI_DB_USER
+              valueFrom:
+                secretKeyRef: { name: glpi-db, key: username }
+            - name: GLPI_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: glpi-db, key: password }
+            - name: TZ
+              value: America/Sao_Paulo
+          volumeMounts:
+            - name: data
+              mountPath: /var/glpi
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: glpi-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glpi-cron
+  namespace: itsm
+  labels:
+    app.kubernetes.io/name: glpi
+    app.kubernetes.io/component: cron
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate      # nunca dois crons simultâneos
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: glpi
+      app.kubernetes.io/component: cron
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: glpi
+        app.kubernetes.io/component: cron
+    spec:
+      securityContext:
+        fsGroup: 33
+      containers:
+        - name: glpi-cron
+          image: glpi/glpi:10.0.26
+          env:
+            - name: GLPI_CRONTAB_ENABLED
+              value: "1"
+            - name: GLPI_SKIP_AUTOINSTALL
+              value: "true"
+            - name: GLPI_SKIP_AUTOUPDATE
+              value: "true"
+            - name: GLPI_DB_HOST
+              value: mariadb.itsm-data.svc.cluster.local
+            - name: GLPI_DB_NAME
+              value: glpi
+            - name: GLPI_DB_USER
+              valueFrom:
+                secretKeyRef: { name: glpi-db, key: username }
+            - name: GLPI_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: glpi-db, key: password }
+            - name: TZ
+              value: America/Sao_Paulo
+          volumeMounts:
+            - name: data
+              mountPath: /var/glpi
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: glpi-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glpi
+  namespace: itsm
+spec:
+  selector:
+    app.kubernetes.io/name: glpi
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: glpi
+  namespace: itsm
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: glpi
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: 80 }
+  behavior:
+    scaleDown:
+      # evita flapping em picos curtos de abertura de chamado
+      stabilizationWindowSeconds: 300
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: glpi
+  namespace: itsm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: glpi
+      app.kubernetes.io/component: web

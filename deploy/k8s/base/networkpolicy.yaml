@@ -1,0 +1,35 @@
+# Segregação de rede entre aplicação e dados (requisito 4.4 da especificação):
+# o namespace itsm-data só aceita tráfego vindo do namespace itsm.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dados-somente-da-aplicacao
+  namespace: itsm-data
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: itsm
+---
+# Bloqueia tráfego lateral não declarado dentro do namespace de aplicação.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nega-entrada-por-padrao
+  namespace: itsm
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              # namespace do ingress controller
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring

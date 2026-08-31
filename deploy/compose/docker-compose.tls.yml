@@ -1,0 +1,45 @@
+# Overlay de produção: emite certificados via Let's Encrypt (ACME TLS-ALPN).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml \
+#     --profile core up -d
+#
+# Requisitos: DOMAIN público, portas 80/443 acessíveis pela internet e
+# registros DNS apontando para este host (glpi., sso., chat., rmm., n8n.,
+# bi., s3., minio., bridge., grafana.).
+services:
+  glpi:
+    labels:
+      traefik.http.routers.glpi.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  keycloak:
+    labels:
+      traefik.http.routers.keycloak.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  minio:
+    labels:
+      traefik.http.routers.minio-api.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.minio-console.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  itsm-bridge:
+    labels:
+      traefik.http.routers.bridge.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  meshcentral:
+    labels:
+      traefik.http.routers.meshcentral.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  chatwoot-web:
+    labels:
+      traefik.http.routers.chatwoot.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  n8n:
+    labels:
+      traefik.http.routers.n8n.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  metabase:
+    labels:
+      traefik.http.routers.metabase.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+
+  grafana:
+    labels:
+      traefik.http.routers.grafana.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}

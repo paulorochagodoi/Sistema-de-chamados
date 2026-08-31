@@ -1,0 +1,687 @@
+# =============================================================================
+# Sistema ITSM containerizado — stack de referência (Docker Compose)
+# -----------------------------------------------------------------------------
+# Os serviços são divididos em profiles, alinhados às fases do roadmap:
+#
+#   core          Fase 1 — GLPI, MariaDB, PostgreSQL, Redis, MinIO, Keycloak,
+#                 Traefik e o itsm-bridge (integrações próprias)
+#   rmm           Fase 2 — MeshCentral (RMM + acesso não supervisionado) e
+#                 RustDesk (acesso sob demanda)
+#   omnichannel   Fase 3 — Chatwoot (chat, WhatsApp, e-mail unificados)
+#   automation    Fase 3 — n8n (barramento de automação) + RabbitMQ
+#   bi            Fase 4/5 — Metabase
+#   observability Fase 5 — Prometheus, Grafana, Loki, Promtail, exporters
+#
+# Uso:
+#   docker compose --profile core up -d
+#   docker compose --profile core --profile rmm up -d
+#   make up-all
+#
+# Redes:
+#   edge  — ingress do Traefik e egresso para a internet (SMTP, APIs)
+#   data  — interna (internal: true), sem rota externa; bancos vivem só aqui
+# =============================================================================
+
+name: itsm
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-glpi-env: &glpi-env
+  TZ: ${TZ:-America/Sao_Paulo}
+  GLPI_DB_HOST: ${GLPI_DB_HOST:-mariadb}
+  GLPI_DB_PORT: ${GLPI_DB_PORT:-3306}
+  GLPI_DB_NAME: ${GLPI_DB_NAME:-glpi}
+  GLPI_DB_USER: ${GLPI_DB_USER:-glpi}
+  GLPI_DB_PASSWORD: ${GLPI_DB_PASSWORD:?defina GLPI_DB_PASSWORD no .env}
+
+services:
+  # ---------------------------------------------------------------------------
+  # Ingress / TLS
+  # ---------------------------------------------------------------------------
+  traefik:
+    image: ${TRAEFIK_IMAGE:-traefik:v3.7}
+    profiles: [core]
+    <<: [*restart, *logging]
+    ports:
+      - "${TRAEFIK_HTTP_PORT:-80}:80"
+      - "${TRAEFIK_HTTPS_PORT:-443}:443"
+    # A configuração estática do Traefik vem por CLI (o Compose interpola as
+    # variáveis aqui); a dinâmica vem do provider de arquivo em ./traefik/dynamic.
+    # Static e file provider não se misturam: por isso nada de traefik.yml estático.
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=INFO
+      - --accesslog=true
+      - --accesslog.filters.statuscodes=400-599
+      - --api.dashboard=${TRAEFIK_DASHBOARD:-false}
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.middlewares=security-headers@file
+      # uploads de anexos e sessões longas de terminal remoto
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=600s
+      - --entrypoints.websecure.transport.respondingtimeouts.writetimeout=600s
+      - --entrypoints.websecure.transport.respondingtimeouts.idletimeout=180s
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=itsm_edge
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@example.com}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --metrics.prometheus=true
+      - --metrics.prometheus.addentrypointslabels=true
+      - --metrics.prometheus.addserviceslabels=true
+      - --ping=true
+    volumes:
+      # somente leitura: o Traefik só precisa descobrir containers
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_acme:/letsencrypt
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    labels:
+      traefik.enable: "true"
+      # dashboard opcional (TRAEFIK_DASHBOARD=true) — só atrás de autenticação
+      traefik.http.routers.traefik.rule: Host(`traefik.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.traefik.entrypoints: websecure
+      traefik.http.routers.traefik.tls: "true"
+      traefik.http.routers.traefik.service: api@internal
+      traefik.http.routers.traefik.middlewares: security-headers@file
+
+  # ---------------------------------------------------------------------------
+  # Persistência
+  # ---------------------------------------------------------------------------
+  mariadb:
+    image: ${MARIADB_IMAGE:-mariadb:11.4}
+    profiles: [core]
+    <<: [*restart, *logging]
+    command: >
+      --transaction-isolation=READ-COMMITTED
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --innodb-buffer-pool-size=1G
+      --max-allowed-packet=64M
+      --log-bin-trust-function-creators=1
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?defina MARIADB_ROOT_PASSWORD no .env}
+      MARIADB_DATABASE: ${GLPI_DB_NAME:-glpi}
+      MARIADB_USER: ${GLPI_DB_USER:-glpi}
+      MARIADB_PASSWORD: ${GLPI_DB_PASSWORD:?defina GLPI_DB_PASSWORD no .env}
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb/init:/docker-entrypoint-initdb.d:ro
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    profiles: [core]
+    <<: [*restart, *logging]
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPER_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPER_PASSWORD:?defina POSTGRES_SUPER_PASSWORD no .env}
+      POSTGRES_DB: postgres
+      # consumidas pelo script de bootstrap em ./postgres/init
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?defina KEYCLOAK_DB_PASSWORD no .env}
+      CHATWOOT_DB_PASSWORD: ${CHATWOOT_DB_PASSWORD:-chatwoot}
+      N8N_DB_PASSWORD: ${N8N_DB_PASSWORD:-n8n}
+      METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD:-metabase}
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPER_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    profiles: [core]
+    <<: [*restart, *logging]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-09-07T16-13-09Z}
+    profiles: [core]
+    <<: [*restart, *logging]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?defina MINIO_ROOT_USER no .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
+      MINIO_BROWSER_REDIRECT_URL: https://minio.${DOMAIN:-itsm.localhost}
+      MINIO_SERVER_URL: https://s3.${DOMAIN:-itsm.localhost}
+    volumes:
+      - minio_data:/data
+    networks: [edge, data]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      # API S3
+      traefik.http.routers.minio-api.rule: Host(`s3.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.minio-api.entrypoints: websecure
+      traefik.http.routers.minio-api.tls: "true"
+      traefik.http.routers.minio-api.service: minio-api
+      traefik.http.services.minio-api.loadbalancer.server.port: "9000"
+      # Console
+      traefik.http.routers.minio-console.rule: Host(`minio.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.minio-console.entrypoints: websecure
+      traefik.http.routers.minio-console.tls: "true"
+      traefik.http.routers.minio-console.service: minio-console
+      traefik.http.routers.minio-console.middlewares: security-headers@file
+      traefik.http.services.minio-console.loadbalancer.server.port: "9001"
+
+  # cria os buckets padrão e sai (executado a cada `up`, idempotente)
+  minio-init:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-09-07T16-13-09Z}
+    profiles: [core]
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/init-buckets.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?defina MINIO_ROOT_USER no .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
+    volumes:
+      - ./minio:/scripts:ro
+    networks: [data]
+    depends_on:
+      - minio
+
+  # ---------------------------------------------------------------------------
+  # Identidade (SSO)
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: ${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.7.0}
+    profiles: [core]
+    <<: [*restart, *logging]
+    # `start` (sem --optimized) faz o augment na subida: aceita a configuração
+    # por env sem exigir uma imagem pré-buildada. Para produção, build uma
+    # imagem otimizada (ver docs/05-operacao-runbook.md) e use --optimized.
+    command: ["start", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?defina KEYCLOAK_ADMIN_PASSWORD no .env}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?defina KEYCLOAK_DB_PASSWORD no .env}
+      KC_HOSTNAME: https://sso.${DOMAIN:-itsm.localhost}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    volumes:
+      - ./keycloak/realms:/opt/keycloak/data/import:ro
+    networks: [edge, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.keycloak.rule: Host(`sso.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.keycloak.entrypoints: websecure
+      traefik.http.routers.keycloak.tls: "true"
+      traefik.http.routers.keycloak.middlewares: security-headers@file
+      traefik.http.services.keycloak.loadbalancer.server.port: "8080"
+
+  # ---------------------------------------------------------------------------
+  # Núcleo ITSM — GLPI
+  # ---------------------------------------------------------------------------
+  # Web: escalável horizontalmente (`docker compose up -d --scale glpi=3`).
+  # O cron roda em container dedicado para não duplicar tarefas ao escalar.
+  glpi:
+    image: ${GLPI_IMAGE:-glpi/glpi:10.0.26}
+    profiles: [core]
+    <<: [*restart, *logging]
+    environment:
+      <<: *glpi-env
+      GLPI_CRONTAB_ENABLED: "0"
+    volumes:
+      - glpi_data:/var/glpi
+    networks: [edge, data]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.glpi.rule: Host(`glpi.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.glpi.entrypoints: websecure
+      traefik.http.routers.glpi.tls: "true"
+      traefik.http.routers.glpi.middlewares: security-headers@file
+      traefik.http.services.glpi.loadbalancer.server.port: "80"
+
+  glpi-cron:
+    image: ${GLPI_IMAGE:-glpi/glpi:10.0.26}
+    profiles: [core]
+    <<: [*restart, *logging]
+    environment:
+      <<: *glpi-env
+      GLPI_CRONTAB_ENABLED: "1"
+      # a instalação/atualização do schema é responsabilidade do container web
+      GLPI_SKIP_AUTOINSTALL: "true"
+      GLPI_SKIP_AUTOUPDATE: "true"
+    volumes:
+      - glpi_data:/var/glpi
+    networks: [edge, data]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    labels:
+      traefik.enable: "false"
+
+  # ---------------------------------------------------------------------------
+  # itsm-bridge — integrações próprias (RMM -> chamado, Chatwoot -> chamado,
+  # SLA, faturamento a partir de apontamentos)
+  # ---------------------------------------------------------------------------
+  itsm-bridge:
+    build:
+      context: ../../services/itsm-bridge
+    image: itsm-bridge:local
+    profiles: [core]
+    <<: [*restart, *logging]
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      BRIDGE_LOG_LEVEL: ${BRIDGE_LOG_LEVEL:-INFO}
+      BRIDGE_GLPI_API_URL: http://glpi/apirest.php
+      BRIDGE_GLPI_APP_TOKEN: ${GLPI_APP_TOKEN:-}
+      BRIDGE_GLPI_USER_TOKEN: ${GLPI_USER_TOKEN:-}
+      BRIDGE_RMM_WEBHOOK_SECRET: ${BRIDGE_RMM_WEBHOOK_SECRET:-}
+      BRIDGE_CHATWOOT_WEBHOOK_SECRET: ${BRIDGE_CHATWOOT_WEBHOOK_SECRET:-}
+      BRIDGE_DEFAULT_ENTITY_ID: ${BRIDGE_DEFAULT_ENTITY_ID:-0}
+      BRIDGE_DEDUPE_TTL_SECONDS: ${BRIDGE_DEDUPE_TTL_SECONDS:-900}
+      BRIDGE_CONVERSATION_TTL_SECONDS: ${BRIDGE_CONVERSATION_TTL_SECONDS:-604800}
+      BRIDGE_REDIS_URL: redis://:${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}@redis:6379/1
+    networks: [edge, data]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.bridge.rule: Host(`bridge.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.bridge.entrypoints: websecure
+      traefik.http.routers.bridge.tls: "true"
+      traefik.http.routers.bridge.middlewares: security-headers@file
+      traefik.http.services.bridge.loadbalancer.server.port: "8000"
+
+  # ---------------------------------------------------------------------------
+  # Fase 2 — RMM e acesso remoto
+  # ---------------------------------------------------------------------------
+  meshcentral:
+    image: ${MESHCENTRAL_IMAGE:-typhonragewind/meshcentral:1.1.53}
+    profiles: [rmm]
+    <<: [*restart, *logging]
+    environment:
+      HOSTNAME: rmm.${DOMAIN:-itsm.localhost}
+      REVERSE_PROXY: traefik
+      REVERSE_PROXY_TLS_PORT: "443"
+      IFRAME: "true"          # permite abrir o terminal remoto dentro do chamado
+      ALLOW_NEW_ACCOUNTS: ${MESHCENTRAL_ALLOW_NEW_ACCOUNTS:-false}
+      WEBRTC: "true"
+      BACKUPS_PW: ${MESHCENTRAL_BACKUPS_PW:-}
+      BACKUP_INTERVAL: "24"
+      BACKUP_KEEP_DAYS: "30"
+    volumes:
+      - meshcentral_data:/opt/meshcentral/meshcentral-data
+      - meshcentral_files:/opt/meshcentral/meshcentral-files
+      - meshcentral_backups:/opt/meshcentral/meshcentral-backups
+    networks: [edge, data]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.meshcentral.rule: Host(`rmm.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.meshcentral.entrypoints: websecure
+      traefik.http.routers.meshcentral.tls: "true"
+      traefik.http.services.meshcentral.loadbalancer.server.port: "443"
+      traefik.http.services.meshcentral.loadbalancer.server.scheme: https
+
+  # RustDesk: acesso sob demanda (supervisionado). Precisa de portas TCP/UDP
+  # dedicadas — não passa pelo Traefik.
+  rustdesk-hbbs:
+    image: ${RUSTDESK_IMAGE:-rustdesk/rustdesk-server:latest}
+    profiles: [rmm]
+    <<: [*restart, *logging]
+    command: ["hbbs", "-r", "${RUSTDESK_RELAY_HOST:-rustdesk.example.com}:21117"]
+    ports:
+      - "21115:21115"
+      - "21116:21116"
+      - "21116:21116/udp"
+      - "21118:21118"
+    volumes:
+      - rustdesk_data:/root
+    networks: [edge]
+    depends_on:
+      - rustdesk-hbbr
+
+  rustdesk-hbbr:
+    image: ${RUSTDESK_IMAGE:-rustdesk/rustdesk-server:latest}
+    profiles: [rmm]
+    <<: [*restart, *logging]
+    command: ["hbbr"]
+    ports:
+      - "21117:21117"
+      - "21119:21119"
+    volumes:
+      - rustdesk_data:/root
+    networks: [edge]
+
+  # ---------------------------------------------------------------------------
+  # Fase 3 — Omnichannel (Chatwoot)
+  # ---------------------------------------------------------------------------
+  chatwoot-web:
+    image: ${CHATWOOT_IMAGE:-chatwoot/chatwoot:v4.17.1}
+    profiles: [omnichannel]
+    <<: [*restart, *logging]
+    entrypoint: ["docker/entrypoints/rails.sh"]
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    environment: &chatwoot-env
+      NODE_ENV: production
+      RAILS_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:?defina CHATWOOT_SECRET_KEY_BASE no .env}
+      FRONTEND_URL: https://chat.${DOMAIN:-itsm.localhost}
+      DEFAULT_LOCALE: ${CHATWOOT_DEFAULT_LOCALE:-pt_BR}
+      FORCE_SSL: "false"        # TLS termina no Traefik
+      ENABLE_ACCOUNT_SIGNUP: "false"
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DATABASE: chatwoot
+      POSTGRES_USERNAME: chatwoot
+      POSTGRES_PASSWORD: ${CHATWOOT_DB_PASSWORD:-chatwoot}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}@redis:6379/2
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      ACTIVE_STORAGE_SERVICE: s3_compatible
+      S3_BUCKET_NAME: chatwoot-uploads
+      STORAGE_REGION: us-east-1
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_FORCE_PATH_STYLE: "true"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-itsm-admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - chatwoot_storage:/app/storage
+    networks: [edge, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.chatwoot.rule: Host(`chat.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.chatwoot.entrypoints: websecure
+      traefik.http.routers.chatwoot.tls: "true"
+      traefik.http.routers.chatwoot.middlewares: security-headers@file
+      traefik.http.services.chatwoot.loadbalancer.server.port: "3000"
+
+  chatwoot-worker:
+    image: ${CHATWOOT_IMAGE:-chatwoot/chatwoot:v4.17.1}
+    profiles: [omnichannel]
+    <<: [*restart, *logging]
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    environment: *chatwoot-env
+    volumes:
+      - chatwoot_storage:/app/storage
+    networks: [edge, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Fase 3 — Automação (n8n em modo fila) e RabbitMQ
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:2.37.6}
+    profiles: [automation]
+    <<: [*restart, *logging]
+    environment: &n8n-env
+      N8N_HOST: n8n.${DOMAIN:-itsm.localhost}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://n8n.${DOMAIN:-itsm.localhost}/
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?defina N8N_ENCRYPTION_KEY no .env}
+      N8N_PROXY_HOPS: "1"
+      GENERIC_TIMEZONE: ${TZ:-America/Sao_Paulo}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: ${POSTGRES_HOST:-postgres}
+      DB_POSTGRESDB_PORT: ${POSTGRES_PORT:-5432}
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD:-n8n}
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: "6379"
+      QUEUE_BULL_REDIS_DB: "3"
+      QUEUE_BULL_REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
+      # endpoints internos usados pelos workflows
+      GLPI_API_URL: http://glpi/apirest.php
+      BRIDGE_URL: http://itsm-bridge:8000
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ../../automation/n8n/workflows:/workflows:ro
+    networks: [edge, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.n8n.rule: Host(`n8n.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.n8n.entrypoints: websecure
+      traefik.http.routers.n8n.tls: "true"
+      traefik.http.routers.n8n.middlewares: security-headers@file
+      traefik.http.services.n8n.loadbalancer.server.port: "5678"
+
+  n8n-worker:
+    image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:2.37.6}
+    profiles: [automation]
+    <<: [*restart, *logging]
+    command: ["worker"]
+    environment: *n8n-env
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks: [edge, data]
+    depends_on:
+      - n8n
+
+  rabbitmq:
+    image: ${RABBITMQ_IMAGE:-rabbitmq:3.13-management}
+    profiles: [automation]
+    <<: [*restart, *logging]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-itsm}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD no .env}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # BI
+  # ---------------------------------------------------------------------------
+  metabase:
+    image: ${METABASE_IMAGE:-metabase/metabase:v0.51.8}
+    profiles: [bi]
+    <<: [*restart, *logging]
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: ${POSTGRES_PORT:-5432}
+      MB_DB_USER: metabase
+      MB_DB_PASS: ${METABASE_DB_PASSWORD:-metabase}
+      MB_DB_HOST: ${POSTGRES_HOST:-postgres}
+      JAVA_TIMEZONE: ${TZ:-America/Sao_Paulo}
+    networks: [edge, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.metabase.rule: Host(`bi.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.metabase.entrypoints: websecure
+      traefik.http.routers.metabase.tls: "true"
+      traefik.http.routers.metabase.middlewares: security-headers@file
+      traefik.http.services.metabase.loadbalancer.server.port: "3000"
+
+  # ---------------------------------------------------------------------------
+  # Observabilidade
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.1.0}
+    profiles: [observability]
+    <<: [*restart, *logging]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    networks: [data]
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.4.0}
+    profiles: [observability]
+    <<: [*restart, *logging]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN:-itsm.localhost}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks: [edge, data]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: itsm_edge
+      traefik.http.routers.grafana.rule: Host(`grafana.${DOMAIN:-itsm.localhost}`)
+      traefik.http.routers.grafana.entrypoints: websecure
+      traefik.http.routers.grafana.tls: "true"
+      traefik.http.routers.grafana.middlewares: security-headers@file
+      traefik.http.services.grafana.loadbalancer.server.port: "3000"
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.3.2}
+    profiles: [observability]
+    <<: [*restart, *logging]
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks: [data]
+
+  promtail:
+    image: ${PROMTAIL_IMAGE:-grafana/promtail:3.3.2}
+    profiles: [observability]
+    <<: [*restart, *logging]
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./loki/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [data]
+    depends_on:
+      - loki
+
+  cadvisor:
+    image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:v0.49.1}
+    profiles: [observability]
+    <<: [*restart, *logging]
+    command: ["--docker_only=true", "--housekeeping_interval=30s"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks: [data]
+
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.8.2}
+    profiles: [observability]
+    <<: [*restart, *logging]
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks: [data]
+
+networks:
+  edge:
+    name: itsm_edge
+  data:
+    name: itsm_data
+    internal: true
+
+volumes:
+  traefik_acme:
+  mariadb_data:
+  postgres_data:
+  redis_data:
+  minio_data:
+  glpi_data:
+  meshcentral_data:
+  meshcentral_files:
+  meshcentral_backups:
+  rustdesk_data:
+  chatwoot_storage:
+  n8n_data:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:

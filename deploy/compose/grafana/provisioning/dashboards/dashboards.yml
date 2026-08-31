@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: itsm
+    orgId: 1
+    folder: ITSM
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

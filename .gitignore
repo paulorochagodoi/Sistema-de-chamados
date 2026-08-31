@@ -1,0 +1,21 @@
+# segredos e configuração local
+.env
+.env.*
+!.env.example
+
+# backups locais
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# editores e SO
+.vscode/
+.idea/
+.DS_Store

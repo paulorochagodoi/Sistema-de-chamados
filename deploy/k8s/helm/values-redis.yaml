@@ -1,0 +1,26 @@
+# Redis (chart bitnami/redis) — cache de sessão, fila do n8n e correlação do bridge.
+#
+#   helm install redis bitnami/redis -n itsm-data -f values-redis.yaml
+architecture: replication
+
+auth:
+  enabled: true
+  existingSecret: redis-credentials
+  existingSecretPasswordKey: password
+
+master:
+  persistence:
+    size: 8Gi
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi }
+
+replica:
+  replicaCount: 2
+  persistence:
+    size: 8Gi
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true

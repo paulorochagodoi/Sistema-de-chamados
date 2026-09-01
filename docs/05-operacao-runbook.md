@@ -112,6 +112,7 @@ quando algo "não abre" — e a saída inteira é o que a equipe precisa ver.
 | Login do painel recusa credenciais certas | login com credenciais desabilitado no GLPI | *Configurar → Geral → API*: ative "login com credenciais externas" |
 | Serviço abre em branco dentro do painel | serviço recusou o iframe | use "Nova aba"; se for um dos embutíveis, confira o middleware `<serviço>-embed` nos labels dele |
 | 404 em texto puro (`404 page not found`) em um subdomínio | nenhum roteador casou com o Host | confira o `DOMAIN` do `.env` e, nos logs do Traefik, `middleware ... does not exist` ou `Host(...)`: `make logs SERVICE=traefik` |
+| 404 em um serviço que está de pé | container `unhealthy`: o Traefik não registra rota para container sem saúde, e a resposta vira 404 (não 502) | `./scripts/diagnose.sh` mostra o estado do healthcheck e a última saída dele |
 | Menu do painel sem os serviços de um perfil | `PORTAL_PROFILES` desatualizado | ajuste no `.env` e `make restart SERVICE=itsm-bridge` |
 
 ## 4. Backup e restore

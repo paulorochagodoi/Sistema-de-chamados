@@ -82,8 +82,19 @@ item "https://bridge.$DOMAIN/healthz .... $(codigo "https://bridge.$DOMAIN/healt
 
 titulo "Portal por dentro da rede (sem passar pelo Traefik)"
 if docker ps --format '{{.Names}}' | grep -q 'portal'; then
-  item "nginx -t ... $("${COMPOSE[@]}" exec -T portal nginx -t 2>&1 | tail -1)"
-  item "GET / ...... $("${COMPOSE[@]}" exec -T portal wget -qO- -S http://localhost/healthz 2>&1 | tail -1)"
+  item "nginx -t ......... $("${COMPOSE[@]}" exec -T portal nginx -t 2>&1 | tail -1)"
+  item "GET /healthz ..... $("${COMPOSE[@]}" exec -T portal wget -qO- http://127.0.0.1/healthz 2>&1 | tail -1)"
+  # Container unhealthy é motivo suficiente para o Traefik não registrar a rota:
+  # ele filtra containers que não estão saudáveis, e a requisição vira 404.
+  cid="$(docker ps -q --filter 'label=com.docker.compose.service=portal' | head -1)"
+  saude="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}sem healthcheck{{end}}' "$cid" 2>/dev/null)"
+  item "healthcheck ...... ${saude:-desconhecido}"
+  if [ "$saude" = "unhealthy" ]; then
+    ultima="$(docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' "$cid" 2>/dev/null |
+      tr -d '\r' | grep -v '^[[:space:]]*$' | tail -1)"
+    item "última saída ..... ${ultima:0:120}"
+    item "atenção .......... o Traefik não roteia container unhealthy: por isso 404 e não 502"
+  fi
 else
   item "container do portal não está de pé"
 fi

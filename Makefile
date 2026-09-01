@@ -12,7 +12,7 @@ ALL_PROFILES := --profile core --profile rmm --profile omnichannel \
 .DEFAULT_GOAL := help
 .PHONY: help env configure install up up-rmm up-omnichannel up-automation \
         up-bi up-observability up-all up-tls down clean ps logs restart smoke \
-        backup test lint validate build-bridge build-portal
+        backup test lint validate build-bridge build-portal reset
 
 help: ## Lista os alvos disponíveis
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -58,6 +58,9 @@ down: ## Para os containers, preservando os volumes
 
 clean: ## Remove containers, redes E volumes (DESTRUTIVO)
 	$(COMPOSE) $(ALL_PROFILES) down -v
+
+reset: ## Apaga instalação: containers, volumes, .env (DESTRUTIVO; --help p/ opções)
+	@./scripts/reset.sh
 
 ps: ## Estado dos containers
 	$(COMPOSE) $(ALL_PROFILES) ps

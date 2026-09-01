@@ -103,7 +103,8 @@ make ps
 | n8n não executa workflows | modo fila sem worker | `docker compose --profile automation up -d n8n-worker` |
 | Painel abre mas não lista chamados | tokens do GLPI ausentes | `curl -k https://bridge.<DOMAIN>/readyz`; preencha `GLPI_APP_TOKEN`/`GLPI_USER_TOKEN` e reinicie o bridge |
 | Login do painel recusa credenciais certas | login com credenciais desabilitado no GLPI | *Configurar → Geral → API*: ative "login com credenciais externas" |
-| Serviço abre em branco dentro do painel | serviço recusou o iframe | use "Nova aba"; se for um dos embutíveis, confira o middleware `portal-embed@docker` nos labels do serviço `portal` |
+| Serviço abre em branco dentro do painel | serviço recusou o iframe | use "Nova aba"; se for um dos embutíveis, confira o middleware `<serviço>-embed` nos labels dele |
+| 404 em texto puro (`404 page not found`) em um subdomínio | nenhum roteador casou com o Host | confira o `DOMAIN` do `.env` e, nos logs do Traefik, `middleware ... does not exist` ou `Host(...)`: `make logs SERVICE=traefik` |
 | Menu do painel sem os serviços de um perfil | `PORTAL_PROFILES` desatualizado | ajuste no `.env` e `make restart SERVICE=itsm-bridge` |
 
 ## 4. Backup e restore
@@ -195,4 +196,32 @@ ENTRYPOINT ["/opt/keycloak/bin/kc.sh", "start", "--optimized"]
 ```bash
 make down          # para os containers, preserva volumes
 make clean         # remove containers, redes E volumes (destrutivo)
+make reset         # apaga a instalação inteira (destrutivo, pede confirmação)
 ```
+
+`scripts/reset.sh` é o "voltar à estaca zero": remove containers, redes, volumes
+e o `.env` do projeto `itsm` — e só dele. Não existe `docker system prune` aqui;
+containers de outros projetos do host ficam intactos, porque a varredura é pelo
+label `com.docker.compose.project=itsm`.
+
+| Opção | Efeito |
+|---|---|
+| `--dry-run` | lista o que seria apagado, sem apagar |
+| `--keep-env` | preserva o `.env` (mesmos segredos e domínio ao subir de novo) |
+| `--keep-volumes` | preserva os dados (bancos, anexos, config dos apps) |
+| `--images` | remove também as imagens da stack |
+| `--host` | remove `itsm.service`, o cron de backup e o sysctl (precisa de root) |
+| `--firewall` | remove as regras de UFW da stack; nunca mexe na de SSH (root) |
+| `--backups` | apaga `backups/` |
+| `--all` | tudo acima |
+| `-y` | não pede confirmação (sem ela, é preciso digitar `APAGAR`) |
+
+Reinstalação limpa, do jeito mais curto:
+
+```bash
+sudo ./scripts/reset.sh --all -y
+sudo ./scripts/install-ubuntu.sh --domain <dom> --email <e-mail> --yes
+```
+
+O Docker Engine, o `/etc/docker/daemon.json` e o código do repositório nunca são
+removidos.

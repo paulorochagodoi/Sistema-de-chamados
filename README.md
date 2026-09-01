@@ -72,7 +72,7 @@ services/portal      painel unificado (React + Vite + Tailwind, servido por ngin
 services/itsm-bridge serviço FastAPI de integração e API do painel (com testes)
 automation/n8n/      workflows prontos para importar
 scripts/             install-ubuntu, configure, gen-secrets, backup, restore,
-                     smoke-test
+                     smoke-test, reset
 docs/                especificação, arquitetura, integrações, runbook, ADRs
 ```
 

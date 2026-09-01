@@ -89,9 +89,16 @@ apontando para o host, e portas 80/443 acessíveis pela internet.
 
 ```bash
 make smoke              # testa containers, bancos, HTTP e regras de negócio
+./scripts/diagnose.sh   # retrato do ambiente: config, containers, rotas e logs
 make logs SERVICE=glpi  # logs de um serviço
 make ps
 ```
+
+`diagnose.sh` não altera nada e não imprime segredos: mostra o `DOMAIN` em uso e
+as URLs que ele gera, o estado de cada container, se as imagens próprias foram
+construídas, o código HTTP de cada endereço, o teste do nginx do portal por
+dentro da rede e os erros recentes do Traefik. É o primeiro comando a rodar
+quando algo "não abre" — e a saída inteira é o que a equipe precisa ver.
 
 | Sintoma | Causa provável | Ação |
 |---|---|---|

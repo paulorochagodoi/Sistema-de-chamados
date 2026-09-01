@@ -12,7 +12,7 @@ ALL_PROFILES := --profile core --profile rmm --profile omnichannel \
 .DEFAULT_GOAL := help
 .PHONY: help env configure install up up-rmm up-omnichannel up-automation \
         up-bi up-observability up-all up-tls down clean ps logs restart smoke \
-        backup test lint validate build-bridge build-portal reset
+        backup test lint validate build-bridge build-portal reset diagnose
 
 help: ## Lista os alvos disponíveis
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -79,6 +79,9 @@ build-portal: ## Recompila a imagem do portal (painel unificado)
 
 smoke: ## Verificação pós-deploy
 	@./scripts/smoke-test.sh
+
+diagnose: ## Retrato do ambiente para diagnóstico (config, containers, rotas, logs)
+	@./scripts/diagnose.sh
 
 backup: ## Backup de bancos, volumes e configuração
 	@./scripts/backup.sh

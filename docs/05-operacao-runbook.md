@@ -70,7 +70,10 @@ senhas conhecidas. Antes de expor o serviço:
 2. Remova `install/install.php` (a imagem oficial já faz isso; confirme em
    *Configurar → Geral → Diagnóstico*).
 3. Crie a hierarquia de entidades (uma por cliente) — é a base do multi-tenant.
-4. Habilite a API REST e gere os tokens (ver [04-integracoes.md](04-integracoes.md#2-glpi)).
+4. Habilite a API REST e gere os tokens (ver [04-integracoes.md](04-integracoes.md#2-glpi)),
+   registre-os com `./scripts/configure.sh --glpi-app-token <tok> --glpi-user-token <tok> --yes`
+   e aplique com `make reload SERVICE=itsm-bridge`. Use `reload` (que é `up -d`)
+   e não `restart`: variável de ambiente nova só entra ao recriar o container.
 
 ## 2. Produção com TLS público
 
@@ -113,7 +116,7 @@ quando algo "não abre" — e a saída inteira é o que a equipe precisa ver.
 | Serviço abre em branco dentro do painel | serviço recusou o iframe | use "Nova aba"; se for um dos embutíveis, confira o middleware `<serviço>-embed` nos labels dele |
 | 404 em texto puro (`404 page not found`) em um subdomínio | nenhum roteador casou com o Host | confira o `DOMAIN` do `.env` e, nos logs do Traefik, `middleware ... does not exist` ou `Host(...)`: `make logs SERVICE=traefik` |
 | 404 em um serviço que está de pé | container `unhealthy`: o Traefik não registra rota para container sem saúde, e a resposta vira 404 (não 502) | `./scripts/diagnose.sh` mostra o estado do healthcheck e a última saída dele |
-| Menu do painel sem os serviços de um perfil | `PORTAL_PROFILES` desatualizado | ajuste no `.env` e `make restart SERVICE=itsm-bridge` |
+| Menu do painel sem os serviços de um perfil | `PORTAL_PROFILES` desatualizado | ajuste no `.env` e `make reload SERVICE=itsm-bridge` |
 
 ## 4. Backup e restore
 
@@ -193,11 +196,11 @@ ENTRYPOINT ["/opt/keycloak/bin/kc.sh", "start", "--optimized"]
 
 | Segredo | Como rotacionar | Impacto |
 |---|---|---|
-| `GLPI_USER_TOKEN` | regenerar em *Preferências → API* e atualizar o `.env` | reiniciar `itsm-bridge` |
+| `GLPI_USER_TOKEN` | regenerar em *Preferências → API* e atualizar o `.env` | `make reload SERVICE=itsm-bridge` |
 | `BRIDGE_*_WEBHOOK_SECRET` | novo valor no `.env` **e** na origem do webhook | alertas rejeitados até alinhar |
 | `N8N_ENCRYPTION_KEY` | **não rotacione sem exportar credenciais antes** | perda das credenciais salvas |
 | Senhas de banco | alterar no banco e no `.env`, recriar os serviços | downtime curto |
-| `PORTAL_SECRET` | novo valor no `.env` e `make restart SERVICE=itsm-bridge` | todas as sessões do painel caem (é o efeito desejado ao revogar acesso) |
+| `PORTAL_SECRET` | novo valor no `.env` e `make reload SERVICE=itsm-bridge` | todas as sessões do painel caem (é o efeito desejado ao revogar acesso) |
 
 ## 9. Limpeza
 

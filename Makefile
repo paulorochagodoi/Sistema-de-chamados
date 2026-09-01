@@ -12,7 +12,7 @@ ALL_PROFILES := --profile core --profile rmm --profile omnichannel \
 .DEFAULT_GOAL := help
 .PHONY: help env configure install up up-rmm up-omnichannel up-automation \
         up-bi up-observability up-all up-tls down clean ps logs restart smoke \
-        backup test lint validate build-bridge build-portal reset diagnose
+        backup test lint validate build-bridge build-portal reset diagnose reload
 
 help: ## Lista os alvos disponíveis
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -70,6 +70,9 @@ logs: ## Logs de um serviço: make logs SERVICE=glpi
 
 restart: ## Reinicia um serviço: make restart SERVICE=itsm-bridge
 	$(COMPOSE) restart $(SERVICE)
+
+reload: ## Aplica mudanças do .env em um serviço: make reload SERVICE=itsm-bridge
+	$(COMPOSE) $(ALL_PROFILES) up -d --no-deps $(SERVICE)
 
 build-bridge: ## Recompila a imagem do itsm-bridge
 	$(COMPOSE) build itsm-bridge

@@ -24,17 +24,38 @@ Em produção, defina `BRIDGE_RMM_WEBHOOK_SECRET` e
 
 ### 2.1 Habilitar a API
 
-1. **Configurar → Geral → API**: ative "Habilitar API REST" e "Habilitar login
-   com credenciais externas" — a segunda opção é o que permite ao painel
-   autenticar as pessoas com o usuário e a senha do próprio GLPI.
-2. Crie um **App-Token** (cliente de API) com a faixa de IP do bridge.
-3. No usuário de serviço (perfil com permissão de criar chamados em todas as
-   entidades), gere o **user_token** em *Preferências → API*.
-4. Preencha no `.env`:
+Enquanto os tokens não existirem, o painel responde
+`GLPI não configurado: defina BRIDGE_GLPI_APP_TOKEN` no login — é o passo que
+falta, não um erro de instalação.
 
-```dotenv
-GLPI_APP_TOKEN=...
-GLPI_USER_TOKEN=...
+1. Entre no GLPI (`https://glpi.<DOMAIN>/`). Na instalação nova, o usuário é
+   `glpi` com senha `glpi` — troque-a antes de qualquer outra coisa.
+2. **Configurar → Geral → aba API**: ative "Habilitar API REST" e "Habilitar
+   login com credenciais" — a segunda é o que permite ao painel autenticar as
+   pessoas com usuário e senha do próprio GLPI. Salve.
+3. Ainda na aba API, em **Clientes da API**, abra o cliente `full access from
+   localhost` (ou crie um): deixe ativo, apague o filtro de IPv4 se o bridge
+   não vier de 127.0.0.1, marque **Regenerar** ao lado de "Token da aplicação
+   (app_token)" e salve. O valor gerado é o **App-Token**.
+4. No usuário de serviço (um perfil com permissão de criar chamados em todas as
+   entidades), vá em **Preferências → aba API**, clique em *Regenerar* na
+   "Chave de API remota" e salve. Esse é o **User-Token**.
+5. Registre os dois e aplique:
+
+```bash
+./scripts/configure.sh --glpi-app-token <app> --glpi-user-token <user> --yes
+make reload SERVICE=itsm-bridge
+```
+
+Os valores ficam no `.env` como `GLPI_APP_TOKEN` e `GLPI_USER_TOKEN`; o Compose
+os injeta no bridge como `BRIDGE_GLPI_APP_TOKEN` e `BRIDGE_GLPI_USER_TOKEN`.
+Use `reload` (que é `up -d`), não `restart`: variável de ambiente nova só entra
+quando o container é recriado.
+
+Para conferir sem abrir o painel:
+
+```bash
+curl -k https://bridge.<DOMAIN>/readyz     # {"ready":true,...} quando os dois existem
 ```
 
 O bridge abre uma sessão por requisição (`initSession`) e sempre a encerra

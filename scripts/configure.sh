@@ -205,6 +205,7 @@ if [ -z "$(get_env GLPI_APP_TOKEN)" ] || [ -z "$(get_env GLPI_USER_TOKEN)" ]; th
     2. Habilite a API REST e o login com credenciais
     3. Crie um cliente de API (App-Token) e um token de usuário (User-Token)
     4. Rode: ./scripts/configure.sh --glpi-app-token <tok> --glpi-user-token <tok> --yes
-    5. Reinicie o bridge: make restart SERVICE=itsm-bridge
+    5. Aplique no bridge: make reload SERVICE=itsm-bridge
+       (é `up -d`, não `restart`: variável nova só entra recriando o container)
 TXT
 fi

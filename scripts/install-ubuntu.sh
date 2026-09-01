@@ -372,7 +372,7 @@ Próximos passos:
      gere App-Token e User-Token.
   3. Registre os tokens e reinicie o bridge:
        sudo ./scripts/configure.sh --glpi-app-token <tok> --glpi-user-token <tok> --yes
-       make restart SERVICE=itsm-bridge
+       make reload SERVICE=itsm-bridge
   4. Entre no painel com um usuário do GLPI: https://$DOMAIN/
 TXT
 
